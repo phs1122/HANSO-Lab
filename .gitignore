@@ -1,0 +1,8 @@
+build/
+build-release/
+.DS_Store
+*.hanso
+*.jucer
+DerivedData/
+CMakeUserPresets.json
+.cursor/
