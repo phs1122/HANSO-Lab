@@ -10,6 +10,7 @@ class HansoSerializer final
 {
 public:
     static bool writeToFile(const HansoPackage& package, const juce::File& destination, juce::String& error);
+    static bool readFromFile(const juce::File& source, HansoPackage& package, juce::String& error);
     static juce::String metadataToJson(const HansoPackage& package);
 };
 }

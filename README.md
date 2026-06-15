@@ -22,8 +22,14 @@ Implemented in this starter project:
 - Basic peak, RMS, frequency-response, transfer-curve, and dynamic-envelope analysis.
 - Residual dataset preparation structure for future neural residual learning.
 - `.hanso` package metadata model.
-- Readable JSON `.hanso` export with a serializer API that can later become a binary or ZIP-like container.
-- Modular UI panels for audio, capture, analysis, assets, and logs.
+- `.hanso` v2 binary container export with JSON metadata plus dry/captured/aligned audio chunks.
+- Guided Capture Wizard with Standard Capture and Easy Capture modes.
+- Easy Capture mono-left output routing: Left = test signal, Right = silence.
+- Basic Amp Liquid Gain recipe with Gain 10%, 50%, and 100% anchor captures.
+- Per-step capture quality checks for signal presence, clipping, level range, length, latency, and alignment confidence.
+- Capture-first UI with a top settings button for audio/log utilities.
+- `Finish Capture` analysis/validation and an `Export` button that opens the package form.
+- Branded final package write action named `Let's HANSO!`.
 
 Intentionally left for future phases:
 
@@ -50,27 +56,45 @@ In this starter project, JUCE is intentionally treated as an external SDK/packag
 
 ## First Capture Test
 
-1. Open the Audio tab and choose the input/output device, sample rate, and buffer size.
-2. Open the Capture tab.
-3. Select `Log sine sweep`, set duration and amplitude, then press `Generate Test Signal`.
-4. Connect the selected output through the amp or device under test into the selected input.
-5. Press `Start`; capture stops automatically when the generated signal ends.
-6. Open the Analysis tab and press `Run Basic Analysis`.
-7. Open the Assets tab, enter metadata, and export a categorized `.hanso` file.
+1. Press the top-right settings button and choose the input/output device, sample rate, and buffer size.
+2. Return to the main Capture Wizard.
+3. Choose `정식 캡쳐` or `간편 캡쳐`.
+4. Follow the connection guide and amp safety warning.
+5. Complete the checklist: setup, calibration, Gain 10%, Gain 50%, Gain 100%, and final validation.
+6. Press `Start Capture` on each step. HANSO Lab generates the test signal automatically.
+7. Press `Finish Capture` to run analysis and validation without sending any new output signal.
+8. Press `Export`, enter package metadata in the popup, then press `Let's HANSO!` to write a categorized `.hanso` file.
+
+The old manual test-signal generator is kept in the Capture tab's `Advanced` section for developer checks only.
 
 ## `.hanso` Package Shape
 
-Phase 1 exports a readable JSON package:
+Phase 2 exports a single-file binary package:
 
 ```text
-{
-  "format": "hanso",
-  "formatVersion": 1,
-  "category": "Amp",
-  "captureSettings": {},
-  "analysisSummary": {},
-  "futureExtensions": {}
-}
+HANSO2
+int32 formatVersion
+int64 metadataJsonSize
+metadata JSON bytes
+int32 chunkCount
+chunk records...
 ```
 
 Every package includes a category field such as `Amp`, `Pedal`, `Cabinet`, `Speaker`, `Pickup`, `Rig`, `Utility`, or `Unknown`.
+
+Manual capture chunks may still use HANSO float32 audio encoding and include:
+
+- `capture/dry-reference.f32`
+- `capture/captured.f32`
+- `capture/aligned-captured.f32`
+
+Guided Liquid Gain captures use compact PCM16 audio chunks. The dry reference is shared instead of duplicated per anchor, and each anchor stores the aligned capture used for analysis:
+
+- `capture/shared/dry-reference.pcm16`
+- `capture/gain-010/aligned-captured.pcm16`
+- `capture/gain-050/aligned-captured.pcm16`
+- `capture/gain-100/aligned-captured.pcm16`
+
+Guided capture metadata is stored under `captureWorkflow`, including capture mode, output routing, cable guide, fixed knob instructions, anchor status, quality reports, chunk ids, and a future interpolation placeholder.
+
+The metadata also includes residual dataset preparation info so future neural residual training can reconstruct aligned input/target segments.

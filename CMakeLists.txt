@@ -48,22 +48,38 @@ set(HANSO_LAB_APP_SOURCES
     Source/Audio/AudioDeviceController.cpp
     Source/Audio/AudioEngine.cpp
     Source/Audio/CaptureAudioSource.cpp
+    Source/Audio/PreviewCabinetProcessor.cpp
+    Source/Audio/PreviewModelProcessor.cpp
     Source/Capture/CaptureEngine.cpp
+    Source/Capture/CaptureRecipe.cpp
     Source/Capture/CaptureSession.cpp
+    Source/Capture/CaptureWizardState.cpp
+    Source/Capture/EasyCaptureSafetyPolicy.cpp
+    Source/Capture/OutputRoutingPolicy.cpp
     Source/Capture/SignalAlignment.cpp
     Source/Capture/TestSignalGenerator.cpp
     Source/Analysis/AnalysisEngine.cpp
+    Source/Analysis/CaptureQualityAnalyzer.cpp
     Source/Analysis/DynamicResponseAnalyzer.cpp
     Source/Analysis/FrequencyResponseAnalyzer.cpp
+    Source/Analysis/ModelExtractionEngine.cpp
+    Source/Analysis/ResidualDatasetBuilder.cpp
     Source/Analysis/TransferCurveAnalyzer.cpp
     Source/Model/HansoPackage.cpp
+    Source/Preview/PreviewSampleLibrary.cpp
     Source/Serialization/HansoSerializer.cpp
+    Source/Serialization/HansoAudioChunkCodec.cpp
+    Source/Serialization/HansoModelCodec.cpp
     Source/UI/AssetPanel.cpp
     Source/UI/AudioSettingsPanel.cpp
     Source/UI/CaptureInputControls.cpp
     Source/UI/CapturePanel.cpp
+    Source/UI/CaptureStatusIcon.cpp
+    Source/UI/PreviewWaveformComponent.cpp
+    Source/UI/TonePreviewPanel.cpp
     Source/UI/AnalysisPanel.cpp
-    Source/UI/LogPanel.cpp)
+    Source/UI/LogPanel.cpp
+    Source/UI/LevelMeter.cpp)
 
 target_sources(HANSO_Lab PRIVATE ${HANSO_LAB_APP_SOURCES})
 

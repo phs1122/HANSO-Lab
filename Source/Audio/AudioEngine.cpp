@@ -54,6 +54,13 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     sampleRate = device != nullptr ? device->getCurrentSampleRate() : 48000.0;
     blockSize = device != nullptr ? device->getCurrentBufferSizeSamples() : 512;
     const auto channelCount = device != nullptr ? device->getActiveOutputChannels().countNumberOfSetBits() : 2;
+    if (device != nullptr)
+    {
+        inputLayout = InputChannelLayout::fromDevice(*device);
+        captureSourceInstance.setInputChannelLayout(inputLayout);
+        appState.appendLog("Input channel layout: " + inputLayout.describeActiveChannels());
+    }
+
     callbackBuffer.setSize(juce::jmax(1, channelCount),
                            juce::jmax(1, blockSize),
                            false,

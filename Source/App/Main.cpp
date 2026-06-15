@@ -23,6 +23,12 @@ public:
 
     void systemRequestedQuit() override
     {
+        if (mainWindow != nullptr)
+        {
+            mainWindow->requestClose();
+            return;
+        }
+
         quit();
     }
 
@@ -47,7 +53,23 @@ private:
 
         void closeButtonPressed() override
         {
-            juce::JUCEApplication::getInstance()->systemRequestedQuit();
+            requestClose();
+        }
+
+        void requestClose()
+        {
+            auto closeApplication = []
+            {
+                juce::JUCEApplication::getInstance()->quit();
+            };
+
+            if (auto* mainComponent = dynamic_cast<MainComponent*>(getContentComponent()))
+            {
+                mainComponent->requestCloseWithWarning(std::move(closeApplication));
+                return;
+            }
+
+            closeApplication();
         }
     };
 

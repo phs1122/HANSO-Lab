@@ -105,9 +105,10 @@ struct InputChannelLayout
         layout.channelNames = device.getInputChannelNames();
         layout.activeChannels = device.getActiveInputChannels();
 
-        if (layout.numDeviceChannels() > 0)
+        const auto highestBit = layout.activeChannels.getHighestBit();
+        if (layout.numDeviceChannels() > 0 && highestBit >= layout.numDeviceChannels())
             layout.activeChannels.setRange(layout.numDeviceChannels(),
-                                           layout.activeChannels.getHighestBit() + 1 - layout.numDeviceChannels(),
+                                           highestBit + 1 - layout.numDeviceChannels(),
                                            false);
 
         return layout;

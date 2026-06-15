@@ -5,6 +5,7 @@
 #include "App/ApplicationState.h"
 #include "Audio/AudioDeviceController.h"
 #include "Audio/CaptureAudioSource.h"
+#include "Audio/InputChannelLayout.h"
 
 namespace hanso
 {
@@ -37,6 +38,7 @@ private:
     AudioDeviceController controller;
     CaptureAudioSource captureSourceInstance;
     juce::AudioBuffer<float> callbackBuffer;
+    InputChannelLayout inputLayout;
     double sampleRate { 48000.0 };
     int blockSize { 512 };
 };

@@ -11,27 +11,62 @@ SignalAlignmentResult SignalAlignment::estimateOffset(const juce::AudioBuffer<fl
     if (samples <= 0 || dry.getNumChannels() == 0 || captured.getNumChannels() == 0)
         return result;
 
-    auto bestCorrelation = -1.0f;
-    auto bestOffset = 0;
-    const auto maxSearch = juce::jmin(samples / 2, static_cast<int>(sampleRate));
-
-    for (int offset = 0; offset < maxSearch; ++offset)
+    auto computeCorrelation = [&dry, &captured, samples](int offset, int stride, int capturedChannel, bool rectified)
     {
         auto correlation = 0.0f;
         auto dryEnergy = 0.0f;
         auto capturedEnergy = 0.0f;
         const auto compareSamples = samples - offset;
-        for (int i = 0; i < compareSamples; i += 4)
+        for (int i = 0; i < compareSamples; i += stride)
         {
-            const auto drySample = dry.getSample(0, i);
-            const auto capturedSample = captured.getSample(0, i + offset);
+            auto drySample = dry.getSample(0, i);
+            auto capturedSample = captured.getSample(capturedChannel, i + offset);
+            if (rectified)
+            {
+                drySample = std::abs(drySample);
+                capturedSample = std::abs(capturedSample);
+            }
+
             correlation += drySample * capturedSample;
             dryEnergy += drySample * drySample;
             capturedEnergy += capturedSample * capturedSample;
         }
 
-        const auto normalized = correlation / (std::sqrt(dryEnergy * capturedEnergy) + 1.0e-9f);
+        return correlation / (std::sqrt(dryEnergy * capturedEnergy) + 1.0e-9f);
+    };
 
+    auto bestCorrelation = -1.0f;
+    auto bestOffset = 0;
+    auto bestChannel = 0;
+    auto bestRectified = false;
+    const auto maxSearch = juce::jmin(samples / 2, static_cast<int>(sampleRate * 0.25));
+    constexpr auto coarseOffsetStep = 32;
+    constexpr auto coarseSampleStride = 32;
+    constexpr auto fineSampleStride = 4;
+
+    for (int channel = 0; channel < captured.getNumChannels(); ++channel)
+    {
+        for (const auto rectified : { false, true })
+        {
+            for (int offset = 0; offset < maxSearch; offset += coarseOffsetStep)
+            {
+                const auto normalized = computeCorrelation(offset, coarseSampleStride, channel, rectified);
+                if (normalized > bestCorrelation)
+                {
+                    bestCorrelation = normalized;
+                    bestOffset = offset;
+                    bestChannel = channel;
+                    bestRectified = rectified;
+                }
+            }
+        }
+    }
+
+    const auto fineStart = juce::jmax(0, bestOffset - coarseOffsetStep);
+    const auto fineEnd = juce::jmin(maxSearch, bestOffset + coarseOffsetStep);
+    for (int offset = fineStart; offset <= fineEnd; ++offset)
+    {
+        const auto normalized = computeCorrelation(offset, fineSampleStride, bestChannel, bestRectified);
         if (normalized > bestCorrelation)
         {
             bestCorrelation = normalized;

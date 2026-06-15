@@ -1,5 +1,6 @@
 #include "UI/AssetPanel.h"
 
+#include "App/Utf8.h"
 #include "Model/HansoCategory.h"
 #include "Serialization/HansoSerializer.h"
 
@@ -8,7 +9,7 @@ namespace hanso
 AssetPanel::AssetPanel(ApplicationState& state)
     : appState(state)
 {
-    styleSectionTitle(title, "Asset Package");
+    styleSectionTitle(title, "HANSO Package");
     addAndMakeVisible(title);
 
     nameLabel.setText("Name", juce::dontSendNotification);
@@ -49,11 +50,20 @@ AssetPanel::AssetPanel(ApplicationState& state)
     categoryBox.onChange = [this] { updatePackageMetadata(); };
     addAndMakeVisible(categoryBox);
 
+    packageSummaryLabel.setText("Package: no capture chunks yet", juce::dontSendNotification);
+    addAndMakeVisible(packageSummaryLabel);
+
     exportPathLabel.setText("Export path: -", juce::dontSendNotification);
     addAndMakeVisible(exportPathLabel);
 
+    exportButton.setButtonText("Let's HANSO!");
     exportButton.onClick = [this] { exportPackage(); };
     addAndMakeVisible(exportButton);
+}
+
+void AssetPanel::refreshSummary()
+{
+    updatePackageSummary();
 }
 
 void AssetPanel::resized()
@@ -91,6 +101,8 @@ void AssetPanel::resized()
     notesEditor.setBounds(row.removeFromLeft(460));
 
     area.removeFromTop(24);
+    packageSummaryLabel.setBounds(area.removeFromTop(28));
+    area.removeFromTop(12);
     exportButton.setBounds(area.removeFromTop(34).removeFromLeft(150));
     area.removeFromTop(12);
     exportPathLabel.setBounds(area.removeFromTop(28));
@@ -108,47 +120,157 @@ void AssetPanel::updatePackageMetadata()
     metadata.notes = notesEditor.getText();
 }
 
+void AssetPanel::updatePackageSummary()
+{
+    const auto& package = appState.currentPackage();
+    auto summary = "Package v" + juce::String(package.formatVersion)
+                 + " / chunks " + juce::String(package.chunks.size());
+
+    if (const auto* captured = package.findChunk("capture/captured.f32"))
+        summary += " / captured " + juce::String(captured->numChannels)
+                + " ch x " + juce::String(captured->numSamples) + " samples";
+    else if (const auto* gainCaptured = package.findChunk("capture/gain-010/aligned-captured.pcm16"))
+        summary += " / gain anchors / aligned " + juce::String(gainCaptured->numChannels)
+                + " ch x " + juce::String(gainCaptured->numSamples) + " samples";
+
+    if (package.findChunk("capture/aligned-captured.f32") != nullptr
+        || package.findChunk("capture/gain-010/aligned-captured.pcm16") != nullptr)
+        summary += " / aligned";
+
+    if (package.findChunk("model/compact-v1.hmodel") != nullptr)
+        summary += " / compact realtime model";
+
+    if (! appState.captureWizard().isExportReady())
+        summary += " / " + appState.captureWizard().exportDisabledReason();
+    else if (appState.captureWizard().hasWarnings())
+        summary += " / warnings";
+
+    packageSummaryLabel.setText(summary, juce::dontSendNotification);
+}
+
 void AssetPanel::exportPackage()
 {
     updatePackageMetadata();
+    updatePackageSummary();
+
+    auto& wizard = appState.captureWizard();
+    appState.currentPackage().captureWorkflow = wizard.toMetadataVar();
+
+    if (! wizard.isExportReady())
+    {
+        appState.appendLog(wizard.exportDisabledReason());
+        exportPathLabel.setText(wizard.exportDisabledReason(), juce::dontSendNotification);
+        return;
+    }
+
+    if (wizard.hasWarnings() && ! wizard.warningExportAccepted)
+    {
+        juce::AlertWindow::showOkCancelBox(juce::AlertWindow::WarningIcon,
+                                           "Export with warnings?",
+                                           utf8("Some captures have warnings. The model may be less accurate.\n그래도 export 할까요?"),
+                                           "Export",
+                                           "Cancel",
+                                           this,
+                                           juce::ModalCallbackFunction::create([this](int result)
+                                           {
+                                               if (result != 0)
+                                               {
+                                                   appState.captureWizard().warningExportAccepted = true;
+                                                   exportPackage();
+                                               }
+                                           }));
+        return;
+    }
 
     auto fileName = appState.currentPackage().metadata.name.trim();
     if (fileName.isEmpty())
         fileName = "Untitled HANSO Asset";
 
-    exportChooser = std::make_unique<juce::FileChooser>(
-        "Export HANSO package",
-        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
-            .getChildFile(fileName + ".hanso"),
-        "*.hanso");
+    exportChooser = std::make_unique<juce::FileChooser>("Choose export folder",
+                                                        appState.lastExportDirectory(),
+                                                        juce::String());
 
-    exportChooser->launchAsync(juce::FileBrowserComponent::saveMode
-                                   | juce::FileBrowserComponent::canSelectFiles
-                                   | juce::FileBrowserComponent::warnAboutOverwriting,
-        [this](const juce::FileChooser& fc)
+    exportChooser->launchAsync(juce::FileBrowserComponent::openMode
+                                   | juce::FileBrowserComponent::canSelectDirectories,
+        [this, fileName](const juce::FileChooser& fc)
         {
-            auto file = fc.getResult();
-            if (file == juce::File())
+            auto directory = fc.getResult();
+            if (directory == juce::File())
             {
                 exportChooser = nullptr;
                 return;
             }
 
+            if (! directory.isDirectory())
+                directory = directory.getParentDirectory();
+
+            auto file = directory.getChildFile(fileName);
             if (! file.hasFileExtension(".hanso"))
                 file = file.withFileExtension(".hanso");
 
-            juce::String error;
-            if (HansoSerializer::writeToFile(appState.currentPackage(), file, error))
-            {
-                exportPathLabel.setText("Export path: " + file.getFullPathName(), juce::dontSendNotification);
-                appState.appendLog("Exported package: " + file.getFullPathName());
-            }
-            else
-            {
-                appState.appendLog("Export failed: " + error);
-            }
-
+            handleExportDestination(file);
             exportChooser = nullptr;
         });
+}
+
+void AssetPanel::handleExportDestination(juce::File file)
+{
+    if (! file.existsAsFile())
+    {
+        writePackageToFile(std::move(file));
+        return;
+    }
+
+    auto options = juce::MessageBoxOptions()
+        .withIconType(juce::MessageBoxIconType::WarningIcon)
+        .withTitle("File already exists")
+        .withMessage("A file with this name already exists.")
+        .withButton("Replace")
+        .withButton("Create Unique Filename")
+        .withButton("Cancel")
+        .withAssociatedComponent(this);
+
+    juce::AlertWindow::showAsync(options, [this, file](int result)
+    {
+        if (result == 1)
+            writePackageToFile(file);
+        else if (result == 2)
+            writePackageToFile(createUniqueFile(file));
+    });
+}
+
+void AssetPanel::writePackageToFile(juce::File file)
+{
+    juce::String error;
+    if (HansoSerializer::writeToFile(appState.currentPackage(), file, error))
+    {
+        appState.setLastExportDirectory(file.getParentDirectory());
+        appState.markCaptureDataSaved();
+        exportPathLabel.setText("Export path: " + file.getFullPathName(), juce::dontSendNotification);
+        appState.appendLog("Exported package: " + file.getFullPathName());
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                                               "Let's HANSO!",
+                                               utf8("저장되었습니다.\n") + file.getFullPathName());
+    }
+    else
+    {
+        appState.appendLog("Export failed: " + error);
+    }
+}
+
+juce::File AssetPanel::createUniqueFile(const juce::File& requestedFile)
+{
+    const auto directory = requestedFile.getParentDirectory();
+    const auto baseName = requestedFile.getFileNameWithoutExtension();
+    const auto extension = requestedFile.getFileExtension();
+
+    for (int i = 1; i < 10000; ++i)
+    {
+        auto candidate = directory.getChildFile(baseName + "_" + juce::String(i).paddedLeft('0', 2) + extension);
+        if (! candidate.exists())
+            return candidate;
+    }
+
+    return requestedFile.getNonexistentSibling();
 }
 }

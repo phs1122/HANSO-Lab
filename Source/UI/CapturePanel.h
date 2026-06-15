@@ -3,9 +3,13 @@
 #include <JuceHeader.h>
 
 #include "App/ApplicationState.h"
+#include "App/LabWorkflow.h"
 #include "Capture/CaptureEngine.h"
+#include "Capture/CaptureMode.h"
+#include "UI/CaptureStatusIcon.h"
 #include "UI/CaptureInputControls.h"
 #include "UI/LabPanel.h"
+#include "UI/LevelMeter.h"
 
 namespace hanso
 {
@@ -13,29 +17,82 @@ class CapturePanel final : public LabPanel,
                            private juce::Timer
 {
 public:
-    CapturePanel(ApplicationState& state, CaptureEngine& captureEngine);
+    CapturePanel(ApplicationState& state, CaptureEngine& captureEngine, LabWorkflow& workflow);
     void startUpdating();
     void resized() override;
+    void paintOverChildren(juce::Graphics& g) override;
+    void setLayoutDebugEnabled(bool enabled);
+    bool isLayoutDebugEnabled() const noexcept;
 
 private:
     void timerCallback() override;
     void applyCaptureSettings(int startChannel, int channelCount);
+    void syncWizardUi();
+    void selectStep(const juce::String& stepId);
+    void updateModeFromButtons();
+    void updateAdvancedVisibility();
+    void updateCalibrationMeter();
+    void handleStepButtonClicked(const juce::String& stepId);
+    void updateStepActions();
+    void runFinishCaptureAnalysis();
+    void showAssetExportDialog();
+    void updateCompletionActions();
+    void showTonePreviewDialog();
+    void confirmStartNewCapture();
+    void showBusyOverlay(const juce::String& titleText, const juce::String& detailText, bool indeterminate);
+    void hideBusyOverlay();
+    void updateBusyOverlay();
 
     ApplicationState& appState;
     CaptureEngine& capture;
+    LabWorkflow& labWorkflow;
     juce::Label title;
     juce::Label statusLabel;
+    juce::TextButton standardModeButton { "Standard Capture" };
+    juce::TextButton easyModeButton { "Easy Capture" };
+    juce::ComboBox cableGuideBox;
+    juce::Label connectionGuideLabel;
+    juce::Label safetyWarningLabel;
+    juce::OwnedArray<CaptureStatusIcon> stepIcons;
+    juce::OwnedArray<juce::TextButton> stepButtons;
+    juce::OwnedArray<juce::TextButton> stepStartButtons;
+    juce::OwnedArray<juce::TextButton> stepRecaptureButtons;
+    juce::OwnedArray<juce::TextButton> stepStopButtons;
+    juce::OwnedArray<juce::TextButton> stepResetButtons;
+    juce::Label instructionTitleLabel;
+    juce::Label instructionLabel;
     juce::TextButton generateButton { "Generate Test Signal" };
-    juce::TextButton startButton { "Start" };
-    juce::TextButton stopButton { "Stop" };
-    juce::TextButton resetButton { "Reset" };
     juce::ComboBox signalType;
     CaptureInputControls captureInputControls;
+    juce::TextButton advancedButton { "Advanced" };
+    bool advancedOpen { false };
+    bool layoutDebugEnabled { false };
+    LevelMeter calibrationOutputMeter;
+    LevelMeter calibrationInputMeter;
+    juce::Label calibrationMeterTitle;
+    juce::Label calibrationOutputSliderLabel;
+    juce::Slider calibrationOutputSlider;
+    juce::Label calibrationOutputMeterLabel;
+    juce::Label calibrationInputMeterLabel;
     juce::Slider levelSlider;
     juce::Slider durationSlider;
     juce::Label inputMeterLabel;
     juce::Label outputMeterLabel;
     juce::Label storedCaptureLabel;
     juce::Label latencyLabel;
+    juce::Label qualityLabel;
+    juce::Label exportReadinessLabel;
+    juce::Label analysisSummaryLabel;
+    juce::TextButton exportButton { "Export" };
+    juce::TextButton previewButton { "Preview" };
+    juce::TextButton newCaptureButton { "Start New Capture" };
+    juce::Label busyBackground;
+    juce::Label busyTitle;
+    juce::Label busyDetail;
+    bool busyOverlayVisible { false };
+    bool busyIndeterminate { false };
+    juce::String busyKind;
+    double busyProgressValue { 0.0 };
+    juce::ProgressBar busyProgress { busyProgressValue };
 };
 }

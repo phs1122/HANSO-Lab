@@ -5,6 +5,7 @@
 #include "App/ApplicationState.h"
 #include "Analysis/DynamicResponseAnalyzer.h"
 #include "Analysis/FrequencyResponseAnalyzer.h"
+#include "Analysis/ResidualDatasetBuilder.h"
 #include "Analysis/TransferCurveAnalyzer.h"
 #include "Capture/CaptureSession.h"
 
@@ -22,5 +23,6 @@ private:
     FrequencyResponseAnalyzer frequencyAnalyzer;
     TransferCurveAnalyzer transferAnalyzer;
     DynamicResponseAnalyzer dynamicAnalyzer;
+    ResidualDatasetBuilder residualDatasetBuilder;
 };
 }

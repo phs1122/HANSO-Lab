@@ -2,8 +2,9 @@
 
 namespace hanso
 {
-LabWorkflow::LabWorkflow(CaptureEngine& captureEngine, AnalysisEngine& analysisEngine)
-    : capture(captureEngine),
+LabWorkflow::LabWorkflow(ApplicationState& state, CaptureEngine& captureEngine, AnalysisEngine& analysisEngine)
+    : appState(state),
+      capture(captureEngine),
       analysis(analysisEngine)
 {
 }
@@ -13,6 +14,22 @@ AnalysisSummary LabWorkflow::runBasicAnalysis()
     capture.refresh();
     capture.alignCompletedCapture();
     return analysis.analyzeSession(capture.currentSession());
+}
+
+ModelExtractionResult LabWorkflow::extractCompactModel()
+{
+    auto result = modelExtraction.extractIntoPackage(appState.currentPackage());
+    if (result.success)
+    {
+        appState.markCaptureDataDirty();
+        appState.appendLog(result.message);
+    }
+    else
+    {
+        appState.appendLog(result.message);
+    }
+
+    return result;
 }
 
 juce::String LabWorkflow::formatSummary(const AnalysisSummary& summary)

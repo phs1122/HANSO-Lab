@@ -53,6 +53,20 @@ AnalysisSummary AnalysisEngine::analyzeSession(const CaptureSession& session)
     package.dynamicProfile.dynamicRangeDb = summary.dynamicRangeDb;
     package.dynamicProfile.transientScore = summary.envelopeAttackMs > 0.0f ? 1000.0f / summary.envelopeAttackMs : 0.0f;
 
+    const auto residualDataset = residualDatasetBuilder.build(dry,
+                                                              captured,
+                                                              session.getSampleRate(),
+                                                              2048,
+                                                              1024);
+    package.residualDataset.prepared = residualDataset.inputSegments.size() > 0
+                                    && residualDataset.targetSegments.size() > 0;
+    package.residualDataset.sampleRate = residualDataset.sampleRate;
+    package.residualDataset.normalizationGain = residualDataset.normalizationGain;
+    package.residualDataset.segmentLength = residualDataset.segmentLength;
+    package.residualDataset.hopSize = residualDataset.hopSize;
+    package.residualDataset.inputSegmentCount = residualDataset.inputSegments.size();
+    package.residualDataset.targetSegmentCount = residualDataset.targetSegments.size();
+
     appState.appendLog("Analysis completed.");
     return summary;
 }
