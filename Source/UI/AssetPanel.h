@@ -21,6 +21,8 @@ private:
     static juce::File createUniqueFile(const juce::File& requestedFile);
     void updatePackageMetadata();
     void updatePackageSummary();
+    bool isCabinetExport() const noexcept;
+    void updateFieldVisibility();
 
     ApplicationState& appState;
     std::unique_ptr<juce::FileChooser> exportChooser;
@@ -35,6 +37,10 @@ private:
     juce::TextEditor yearEditor;
     juce::Label notesLabel;
     juce::TextEditor notesEditor;
+    juce::Label micTypeLabel;
+    juce::TextEditor micTypeEditor;
+    juce::Label speakerDescriptionLabel;
+    juce::TextEditor speakerDescriptionEditor;
     juce::Label categoryLabel;
     juce::ComboBox categoryBox;
     juce::Label packageSummaryLabel;

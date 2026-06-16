@@ -72,7 +72,7 @@ TonePreviewPanel::TonePreviewPanel(ApplicationState& state, CaptureEngine& captu
     stopButton.setTooltip("Stop preview playback");
     loopButton.setTooltip("Loop selected preview sample");
     normalizationButton.setTooltip(utf8("클린/앰프 톤 간 체감 볼륨 차이를 맞춥니다."));
-    cabinetButton.setTooltip(utf8("앰프 모델 출력에 캐비넷 DSP를 적용합니다. (모델 로드 시에만)"));
+    cabinetButton.setTooltip(utf8("앰프 모델 출력에 캐비넷 DSP를 적용합니다. (앰프 모델 로드 시에만)"));
     playButton.onClick = [this] { playSelectedSample(); };
     stopButton.onClick = [this] { stopPlayback(); };
     loopButton.onClick = [this] { capture.setPreviewLoopEnabled(loopButton.getToggleState()); };
@@ -114,10 +114,9 @@ TonePreviewPanel::TonePreviewPanel(ApplicationState& state, CaptureEngine& captu
     waveform.onSeek = [this](double progress)
     {
         capture.seekPreviewSample(progress);
-        waveform.setProgress(progress);
     };
 
-    loadInitialPreviewModel();
+    applyPreviewControlLabels();
     refreshSamples();
     updateButtonState();
     startTimerHz(12);
@@ -235,17 +234,90 @@ void TonePreviewPanel::timerCallback()
 {
     syncModelFromCaptureEngine();
     waveform.setProgress(capture.previewSampleProgress());
-
     updateButtonState();
+}
+
+void TonePreviewPanel::applyPreviewControlLabels()
+{
+    if (previewSourceMode == PreviewSourceMode::CabinetPackage)
+    {
+        gainSlider.setTextValueSuffix("% Mic");
+        ampLabel.setText("HANSO CAB\nMic Position", juce::dontSendNotification);
+    }
+    else
+    {
+        gainSlider.setTextValueSuffix("% Gain");
+        ampLabel.setText("HANSO AMP\nPreview Cabinet", juce::dontSendNotification);
+    }
+}
+
+bool TonePreviewPanel::isCabinetPackage(const HansoPackage& package) const noexcept
+{
+    if (package.metadata.category == HansoCategory::Cabinet)
+        return true;
+
+    if (! package.cabinetProfile.isVoid())
+        return true;
+
+    return false;
+}
+
+bool TonePreviewPanel::loadCabinetPackageFromFile(const juce::File& file, HansoPackage& package)
+{
+    juce::String error;
+    if (! HansoSerializer::readFromFile(file, package, error))
+    {
+        statusLabel.setText("Open HANSO failed: " + error, juce::dontSendNotification);
+        modelLabel.setText("Open HANSO failed: " + error, juce::dontSendNotification);
+        return false;
+    }
+
+    if (! isCabinetPackage(package))
+        return false;
+
+    if (! capture.loadPreviewCabinetPackage(package))
+    {
+        statusLabel.setText(utf8("캐비넷 .hanso를 프리뷰할 수 없습니다. captured/imported IR이 필요합니다."),
+                            juce::dontSendNotification);
+        modelLabel.setText(utf8("Cabinet preview unavailable"), juce::dontSendNotification);
+        return false;
+    }
+
+    previewSourceMode = PreviewSourceMode::CabinetPackage;
+    model = {};
+    modelReady = true;
+    observedPreviewCabinetRevision = capture.previewCabinetRevision();
+    observedPreviewRevision = capture.previewModelRevision();
+    applyPreviewControlLabels();
+    capture.setPreviewMicPositionPercent(static_cast<float>(gainSlider.getValue()));
+
+    const auto toneName = package.metadata.name.trim().isNotEmpty()
+                        ? package.metadata.name.trim()
+                        : file.getFileNameWithoutExtension();
+    modelLabel.setText(utf8("Cabinet Preview: ") + toneName, juce::dontSendNotification);
+    statusLabel.setText("Opened cabinet HANSO: " + file.getFileName(), juce::dontSendNotification);
+    return true;
 }
 
 void TonePreviewPanel::loadInitialPreviewModel()
 {
+    if (capture.hasPreviewCabinetPackage())
+    {
+        previewSourceMode = PreviewSourceMode::CabinetPackage;
+        modelReady = true;
+        observedPreviewCabinetRevision = capture.previewCabinetRevision();
+        applyPreviewControlLabels();
+        modelLabel.setText(utf8("Cabinet preview loaded."), juce::dontSendNotification);
+        return;
+    }
+
     if (const auto* currentModel = capture.currentPreviewModel())
     {
         model = *currentModel;
+        previewSourceMode = PreviewSourceMode::AmpModel;
         modelReady = true;
         observedPreviewRevision = capture.previewModelRevision();
+        applyPreviewControlLabels();
         modelLabel.setText(model.summary(), juce::dontSendNotification);
         return;
     }
@@ -259,7 +331,9 @@ void TonePreviewPanel::loadModelFromPackage()
     if (chunk == nullptr)
     {
         modelReady = false;
+        previewSourceMode = PreviewSourceMode::Clean;
         observedPreviewRevision = capture.previewModelRevision();
+        applyPreviewControlLabels();
         modelLabel.setText(utf8("Clean preview: 모델 없이 원본 샘플을 재생합니다."), juce::dontSendNotification);
         return;
     }
@@ -268,20 +342,25 @@ void TonePreviewPanel::loadModelFromPackage()
     modelReady = HansoModelCodec::decodeCompactModel(chunk->data, model, error);
     if (! modelReady)
     {
+        previewSourceMode = PreviewSourceMode::Clean;
         modelLabel.setText("Model decode failed: " + error, juce::dontSendNotification);
         return;
     }
 
     capture.loadPreviewModel(model);
     capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
+    previewSourceMode = PreviewSourceMode::AmpModel;
     observedPreviewRevision = capture.previewModelRevision();
+    applyPreviewControlLabels();
     modelLabel.setText(utf8("Unsaved current tone: ") + model.summary(), juce::dontSendNotification);
-    modelReady = true;
 }
 
 bool TonePreviewPanel::loadModelFromHansoFile(const juce::File& file)
 {
     HansoPackage package;
+    if (loadCabinetPackageFromFile(file, package))
+        return true;
+
     juce::String error;
     if (! HansoSerializer::readFromFile(file, package, error))
     {
@@ -299,11 +378,15 @@ bool TonePreviewPanel::loadModelFromHansoFile(const juce::File& file)
         return false;
     }
 
+    capture.clearPreviewCabinetPackage();
     model = std::move(loadedModel);
     modelReady = capture.loadPreviewModel(model);
     if (modelReady)
         capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
+    previewSourceMode = modelReady ? PreviewSourceMode::AmpModel : PreviewSourceMode::Clean;
     observedPreviewRevision = capture.previewModelRevision();
+    observedPreviewCabinetRevision = capture.previewCabinetRevision();
+    applyPreviewControlLabels();
     const auto toneName = package.metadata.name.trim().isNotEmpty()
                         ? package.metadata.name.trim()
                         : file.getFileNameWithoutExtension();
@@ -367,6 +450,29 @@ void TonePreviewPanel::openHansoFile()
 
 void TonePreviewPanel::syncModelFromCaptureEngine()
 {
+    const auto cabinetRevision = capture.previewCabinetRevision();
+    if (cabinetRevision != observedPreviewCabinetRevision)
+    {
+        observedPreviewCabinetRevision = cabinetRevision;
+        if (capture.hasPreviewCabinetPackage())
+        {
+            previewSourceMode = PreviewSourceMode::CabinetPackage;
+            modelReady = true;
+            capture.setPreviewMicPositionPercent(static_cast<float>(gainSlider.getValue()));
+            applyPreviewControlLabels();
+            modelLabel.setText(utf8("Cabinet preview active."), juce::dontSendNotification);
+            return;
+        }
+
+        if (previewSourceMode == PreviewSourceMode::CabinetPackage)
+        {
+            previewSourceMode = PreviewSourceMode::Clean;
+            modelReady = false;
+            applyPreviewControlLabels();
+            modelLabel.setText(utf8("Clean preview: 모델 없이 원본 샘플을 재생합니다."), juce::dontSendNotification);
+        }
+    }
+
     const auto revision = capture.previewModelRevision();
     if (revision == observedPreviewRevision)
         return;
@@ -375,14 +481,18 @@ void TonePreviewPanel::syncModelFromCaptureEngine()
     if (const auto* currentModel = capture.currentPreviewModel())
     {
         model = *currentModel;
+        previewSourceMode = PreviewSourceMode::AmpModel;
         modelReady = true;
         capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
+        applyPreviewControlLabels();
         modelLabel.setText(utf8("Current preview tone: ") + model.summary(), juce::dontSendNotification);
     }
-    else
+    else if (previewSourceMode != PreviewSourceMode::CabinetPackage)
     {
         model = {};
+        previewSourceMode = PreviewSourceMode::Clean;
         modelReady = false;
+        applyPreviewControlLabels();
         modelLabel.setText(utf8("Clean preview: 모델 없이 원본 샘플을 재생합니다."), juce::dontSendNotification);
     }
 }
@@ -470,7 +580,10 @@ void TonePreviewPanel::updateGainModel()
     if (! modelReady)
         return;
 
-    capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
+    if (previewSourceMode == PreviewSourceMode::CabinetPackage)
+        capture.setPreviewMicPositionPercent(static_cast<float>(gainSlider.getValue()));
+    else
+        capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
 }
 
 void TonePreviewPanel::updateButtonState()
@@ -479,7 +592,7 @@ void TonePreviewPanel::updateButtonState()
     playButton.setEnabled(hasSelection);
     stopButton.setEnabled(capture.isPreviewSamplePlaying());
     gainSlider.setEnabled(modelReady);
-    cabinetButton.setEnabled(modelReady);
+    cabinetButton.setEnabled(modelReady && previewSourceMode == PreviewSourceMode::AmpModel);
     loopButton.setToggleState(capture.isPreviewLoopEnabled(), juce::dontSendNotification);
     normalizationButton.setToggleState(capture.isPreviewNormalizationEnabled(), juce::dontSendNotification);
     cabinetButton.setToggleState(capture.isPreviewCabinetEnabled(), juce::dontSendNotification);

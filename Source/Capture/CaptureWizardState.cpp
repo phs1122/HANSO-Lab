@@ -4,6 +4,24 @@ namespace hanso
 {
 namespace
 {
+std::vector<CabinetMicPositionSlot> createDefaultCabinetSlots()
+{
+    auto makeSlot = [](const char* id, const char* label)
+    {
+        CabinetMicPositionSlot slot;
+        slot.id = id;
+        slot.label = label;
+        return slot;
+    };
+
+    std::vector<CabinetMicPositionSlot> slots;
+    slots.push_back(makeSlot("cab-center", "Center"));
+    slots.push_back(makeSlot("cab-edge", "Edge"));
+    slots.push_back(makeSlot("cab-cone", "Cone"));
+    slots.push_back(makeSlot("cab-off-axis", "Off-Axis"));
+    return slots;
+}
+
 juce::var qualityToVar(const CaptureQualityReport& report)
 {
     auto object = new juce::DynamicObject();
@@ -34,9 +52,28 @@ juce::var qualityToVar(const CaptureQualityReport& report)
 }
 
 CaptureWizardState::CaptureWizardState()
-    : recipe(CaptureRecipe::createBasicAmpLiquidGain())
+    : CaptureWizardState(CaptureType::Amp)
 {
+}
+
+CaptureWizardState::CaptureWizardState(CaptureType type)
+{
+    setCaptureType(type);
+}
+
+void CaptureWizardState::setCaptureType(CaptureType type)
+{
+    captureType = type;
+    recipe = captureType == CaptureType::Cabinet
+           ? CaptureRecipe::createCabinetMicPositions()
+           : CaptureRecipe::createBasicAmpLiquidGain();
+
+    results.clear();
+    cabinetSlots = captureType == CaptureType::Cabinet ? createDefaultCabinetSlots()
+                                                       : std::vector<CabinetMicPositionSlot>();
     currentStepId = recipe.steps.empty() ? juce::String() : recipe.steps.front().stepId;
+    calibrationPassed = false;
+    warningExportAccepted = false;
 }
 
 CaptureStep* CaptureWizardState::findStep(const juce::String& stepId) noexcept
@@ -127,13 +164,28 @@ bool CaptureWizardState::hasWarnings() const noexcept
 
 bool CaptureWizardState::isExportReady() const noexcept
 {
+    if (captureType == CaptureType::Cabinet && ! hasCabinetRealSource())
+        return false;
+
     return firstIncompleteRequiredStep() == nullptr;
 }
 
 juce::String CaptureWizardState::exportDisabledReason() const
 {
     if (const auto* step = firstIncompleteRequiredStep())
+    {
+        if (captureType == CaptureType::Cabinet
+            && step->stepId == "final-validation"
+            && ! hasCabinetRealSource())
+        {
+            return "Export disabled: " + juce::String::fromUTF8("캐비넷을 내보내려면 최소 1개 이상의 마이크 위치를 캡쳐하거나 IR로 가져와야 합니다.");
+        }
+
         return "Export disabled: " + step->title + " is not completed.";
+    }
+
+    if (captureType == CaptureType::Cabinet && ! hasCabinetRealSource())
+        return "Export disabled: " + juce::String::fromUTF8("캐비넷을 내보내려면 최소 1개 이상의 마이크 위치를 캡쳐하거나 IR로 가져와야 합니다.");
 
     return {};
 }
@@ -141,6 +193,7 @@ juce::String CaptureWizardState::exportDisabledReason() const
 juce::var CaptureWizardState::toMetadataVar() const
 {
     auto object = new juce::DynamicObject();
+    object->setProperty("captureType", toString(captureType));
     object->setProperty("captureMode", toString(mode));
 
     auto routing = new juce::DynamicObject();
@@ -191,23 +244,205 @@ juce::var CaptureWizardState::toMetadataVar() const
         }
         else
         {
+            const auto isCabinetPosition = captureType == CaptureType::Cabinet
+                                        && step.anchor.parameterKey == "cabinet-position";
             const auto prefix = step.anchor.chunkPathPrefix();
-            anchor->setProperty("dryChunkId", "capture/shared/dry-reference.pcm16");
+            anchor->setProperty("dryChunkId", isCabinetPosition ? "capture/shared/cabinet-dry-reference.pcm16"
+                                                                : "capture/shared/dry-reference.pcm16");
             anchor->setProperty("capturedChunkId", juce::var());
-            anchor->setProperty("alignedChunkId", prefix + "/aligned-captured.pcm16");
+            anchor->setProperty("alignedChunkId", isCabinetPosition ? "cabinet/positions/" + step.stepId + "/ir.pcm16"
+                                                                    : prefix + "/aligned-captured.pcm16");
         }
 
         anchors.add(anchor);
     }
     recipeObject->setProperty("anchors", anchors);
 
+    if (captureType == CaptureType::Cabinet)
+    {
+        juce::Array<juce::var> positions;
+        for (const auto& slot : cabinetSlots)
+        {
+            auto position = new juce::DynamicObject();
+            position->setProperty("id", slot.id);
+            position->setProperty("label", slot.label);
+            position->setProperty("source", toString(slot.source));
+            position->setProperty("impulseResponseChunkId",
+                                  slot.impulseResponseChunkId.isNotEmpty()
+                                      ? juce::var(slot.impulseResponseChunkId)
+                                      : juce::var());
+            position->setProperty("sourceFileName",
+                                  slot.sourceFileName.isNotEmpty()
+                                      ? juce::var(slot.sourceFileName)
+                                      : juce::var());
+            position->setProperty("estimatedFrom",
+                                  slot.estimatedFrom.isNotEmpty()
+                                      ? juce::var(slot.estimatedFrom)
+                                      : juce::var());
+            position->setProperty("error",
+                                  slot.errorMessage.isNotEmpty()
+                                      ? juce::var(slot.errorMessage)
+                                      : juce::var());
+            positions.add(position);
+        }
+
+        recipeObject->setProperty("positions", positions);
+    }
+
     auto interpolation = new juce::DynamicObject();
-    interpolation->setProperty("parameterKey", "gain");
-    interpolation->setProperty("method", "future-nonlinear-fit");
+    interpolation->setProperty("parameterKey", captureType == CaptureType::Cabinet ? "micPosition" : "gain");
+    interpolation->setProperty("method", captureType == CaptureType::Cabinet ? "source-anchor-estimation" : "future-nonlinear-fit");
     interpolation->setProperty("status", "notComputed");
     recipeObject->setProperty("interpolationPlan", interpolation);
 
     object->setProperty("captureRecipe", recipeObject);
     return object;
+}
+
+CabinetMicPositionSlot* CaptureWizardState::findCabinetSlot(const juce::String& stepId) noexcept
+{
+    for (auto& slot : cabinetSlots)
+        if (slot.id == stepId)
+            return &slot;
+
+    return nullptr;
+}
+
+const CabinetMicPositionSlot* CaptureWizardState::findCabinetSlot(const juce::String& stepId) const noexcept
+{
+    for (const auto& slot : cabinetSlots)
+        if (slot.id == stepId)
+            return &slot;
+
+    return nullptr;
+}
+
+void CaptureWizardState::markCabinetSlotCaptured(const juce::String& stepId, const juce::String& chunkId)
+{
+    if (auto* slot = findCabinetSlot(stepId))
+    {
+        slot->source = CabinetSlotSource::CapturedIr;
+        slot->impulseResponseChunkId = chunkId;
+        slot->sourceFileName.clear();
+        slot->estimatedFrom.clear();
+        slot->errorMessage.clear();
+    }
+}
+
+void CaptureWizardState::markCabinetSlotImported(const juce::String& stepId, const juce::String& chunkId, const juce::String& sourceFileName)
+{
+    if (auto* slot = findCabinetSlot(stepId))
+    {
+        slot->source = CabinetSlotSource::ImportedIr;
+        slot->impulseResponseChunkId = chunkId;
+        slot->sourceFileName = sourceFileName;
+        slot->estimatedFrom.clear();
+        slot->errorMessage.clear();
+    }
+}
+
+void CaptureWizardState::markCabinetSlotCapturing(const juce::String& stepId)
+{
+    if (auto* slot = findCabinetSlot(stepId))
+    {
+        slot->source = CabinetSlotSource::Capturing;
+        slot->errorMessage.clear();
+    }
+}
+
+void CaptureWizardState::markCabinetSlotError(const juce::String& stepId, const juce::String& error)
+{
+    if (auto* slot = findCabinetSlot(stepId))
+    {
+        slot->source = CabinetSlotSource::Error;
+        slot->errorMessage = error;
+    }
+}
+
+void CaptureWizardState::resetCabinetSlot(const juce::String& stepId)
+{
+    if (auto* slot = findCabinetSlot(stepId))
+    {
+        const auto id = slot->id;
+        const auto label = slot->label;
+        *slot = {};
+        slot->id = id;
+        slot->label = label;
+    }
+}
+
+bool CaptureWizardState::hasCabinetRealSource() const noexcept
+{
+    for (const auto& slot : cabinetSlots)
+        if (slot.hasRealSource())
+            return true;
+
+    return false;
+}
+
+juce::StringArray CaptureWizardState::cabinetRealSourceIds() const
+{
+    juce::StringArray ids;
+    for (const auto& slot : cabinetSlots)
+        if (slot.hasRealSource())
+            ids.add(slot.id);
+
+    return ids;
+}
+
+void CaptureWizardState::estimateEmptyCabinetSlots()
+{
+    const auto sources = cabinetRealSourceIds();
+    if (sources.isEmpty())
+        return;
+
+    for (auto& slot : cabinetSlots)
+    {
+        if (slot.source == CabinetSlotSource::Empty)
+        {
+            slot.source = CabinetSlotSource::EstimatedCompactCab;
+            slot.estimatedFrom = sources.joinIntoString(",");
+            if (auto* step = findStep(slot.id))
+                step->status = CaptureStepStatus::Warning;
+        }
+    }
+}
+
+juce::var CaptureWizardState::toCabinetProfileVar(const juce::String& cabinetName,
+                                                  const juce::String& micType,
+                                                  const juce::String& speakerDescription,
+                                                  const juce::String& notes) const
+{
+    auto profile = new juce::DynamicObject();
+    profile->setProperty("cabinetName", cabinetName);
+    profile->setProperty("micType", micType);
+    profile->setProperty("speaker", speakerDescription);
+    profile->setProperty("description", speakerDescription);
+    profile->setProperty("notes", notes);
+
+    juce::Array<juce::var> positions;
+    for (const auto& slot : cabinetSlots)
+    {
+        auto position = new juce::DynamicObject();
+        position->setProperty("id", slot.id);
+        position->setProperty("label", slot.label);
+        position->setProperty("source", toString(slot.source));
+        position->setProperty("impulseResponseChunkId",
+                              slot.impulseResponseChunkId.isNotEmpty()
+                                  ? juce::var(slot.impulseResponseChunkId)
+                                  : juce::var());
+        position->setProperty("sourceFileName",
+                              slot.sourceFileName.isNotEmpty()
+                                  ? juce::var(slot.sourceFileName)
+                                  : juce::var());
+        position->setProperty("estimatedFrom",
+                              slot.estimatedFrom.isNotEmpty()
+                                  ? juce::var(slot.estimatedFrom)
+                                  : juce::var());
+        positions.add(position);
+    }
+
+    profile->setProperty("positions", positions);
+    return profile;
 }
 }

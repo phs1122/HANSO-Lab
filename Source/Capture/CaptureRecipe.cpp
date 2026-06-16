@@ -37,4 +37,36 @@ CaptureRecipe CaptureRecipe::createBasicAmpLiquidGain()
 
     return recipe;
 }
+
+CaptureRecipe CaptureRecipe::createCabinetMicPositions()
+{
+    CaptureRecipe recipe;
+    recipe.recipeId = "cabinet-mic-position-basic";
+    recipe.displayName = "Cabinet Mic Position Capture";
+    recipe.category = HansoCategory::Cabinet;
+
+    recipe.steps.push_back({ "setup", "Setup Confirmed",
+                             utf8("캐비넷 캡쳐 체인을 확인하세요.\n앱 출력 → 파워앰프/IR 소스 → 캐비넷/마이크 또는 안전한 로드박스 → 오디오 인터페이스 입력으로 연결합니다.\nSpeaker Out을 오디오 인터페이스에 직접 연결하지 마세요."),
+                             CaptureStepStatus::Ready, {}, true });
+    recipe.steps.push_back({ "calibration", "Calibration Complete",
+                             utf8("Calibration Start를 누른 뒤 출력과 리턴 레벨이 안전 범위에 들어오도록 조절하세요.\n리턴 입력이 -36 ~ -8 dBFS에 3초 이상 머물면 자동 완료됩니다."),
+                             CaptureStepStatus::NotStarted, {}, true });
+    recipe.steps.push_back({ "cab-center", "Center",
+                             utf8("마이크를 스피커 더스트캡 중심에 둔 위치입니다.\n직접 캡쳐하거나 외부 IR을 Import할 수 있습니다."),
+                             CaptureStepStatus::NotStarted, { "cabinet-position", 0.0f, "Center" }, false });
+    recipe.steps.push_back({ "cab-edge", "Edge",
+                             utf8("마이크를 더스트캡과 콘의 경계 근처에 둔 위치입니다.\n비워두면 Finish 단계에서 실제 source를 기반으로 추정됩니다."),
+                             CaptureStepStatus::NotStarted, { "cabinet-position", 0.33f, "Edge" }, false });
+    recipe.steps.push_back({ "cab-cone", "Cone",
+                             utf8("마이크를 스피커 콘 영역 쪽으로 이동한 위치입니다.\n직접 캡쳐, IR Import, 또는 자동 추정을 사용할 수 있습니다."),
+                             CaptureStepStatus::NotStarted, { "cabinet-position", 0.66f, "Cone" }, false });
+    recipe.steps.push_back({ "cab-off-axis", "Off-Axis",
+                             utf8("마이크를 축에서 살짝 벗어난 각도로 둔 위치입니다.\n직접 캡쳐하거나 IR을 Import할 수 있습니다."),
+                             CaptureStepStatus::NotStarted, { "cabinet-position", 1.0f, "Off-Axis" }, false });
+    recipe.steps.push_back({ "final-validation", "Finish / Build Cabinet",
+                             utf8("최소 1개 이상의 마이크 위치가 직접 캡쳐되었거나 IR로 Import되어야 합니다.\n비어 있는 위치는 HANSO가 실제 IR source를 기반으로 estimated compact cab 슬롯으로 채웁니다."),
+                             CaptureStepStatus::NotStarted, {}, true });
+
+    return recipe;
+}
 }

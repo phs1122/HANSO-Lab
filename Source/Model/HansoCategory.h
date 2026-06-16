@@ -45,6 +45,37 @@ inline HansoCategory hansoCategoryFromString(const juce::String& text)
     return HansoCategory::Unknown;
 }
 
+inline juce::String assetTypeForCategory(HansoCategory category)
+{
+    switch (category)
+    {
+        case HansoCategory::Amp: return "amp";
+        case HansoCategory::Cabinet: return "cabinet";
+        case HansoCategory::Pedal: return "pedal";
+        case HansoCategory::Speaker: return "speaker";
+        case HansoCategory::Pickup: return "pickup";
+        case HansoCategory::Rig: return "full-rig";
+        case HansoCategory::Utility: return "utility";
+        case HansoCategory::Unknown: return "unknown";
+    }
+
+    return "unknown";
+}
+
+inline HansoCategory hansoCategoryFromAssetType(const juce::String& assetType)
+{
+    if (assetType.equalsIgnoreCase("amp")) return HansoCategory::Amp;
+    if (assetType.equalsIgnoreCase("cabinet")) return HansoCategory::Cabinet;
+    if (assetType.equalsIgnoreCase("pedal")) return HansoCategory::Pedal;
+    if (assetType.equalsIgnoreCase("effect")) return HansoCategory::Utility;
+    if (assetType.equalsIgnoreCase("speaker")) return HansoCategory::Speaker;
+    if (assetType.equalsIgnoreCase("pickup")) return HansoCategory::Pickup;
+    if (assetType.equalsIgnoreCase("full-rig") || assetType.equalsIgnoreCase("fullrig") || assetType.equalsIgnoreCase("rig"))
+        return HansoCategory::Rig;
+    if (assetType.equalsIgnoreCase("utility")) return HansoCategory::Utility;
+    return HansoCategory::Unknown;
+}
+
 inline juce::StringArray allHansoCategoryNames()
 {
     return { "Amp", "Pedal", "Cabinet", "Speaker", "Pickup", "Rig", "Utility", "Unknown" };

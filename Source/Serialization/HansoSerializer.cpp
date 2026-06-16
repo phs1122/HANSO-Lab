@@ -111,6 +111,13 @@ bool HansoSerializer::readFromFile(const juce::File& source, HansoPackage& packa
         package.metadata.deviceType = object->getProperty("deviceType").toString();
         package.metadata.notes = object->getProperty("notes").toString();
         package.metadata.category = hansoCategoryFromString(object->getProperty("category").toString());
+
+        const auto assetType = object->getProperty("assetType").toString();
+        if (package.metadata.category == HansoCategory::Unknown && assetType.isNotEmpty())
+            package.metadata.category = hansoCategoryFromAssetType(assetType);
+
+        package.captureWorkflow = object->getProperty("captureWorkflow");
+        package.cabinetProfile = object->getProperty("cabProfile");
     }
 
     const auto chunkCount = stream->readInt();

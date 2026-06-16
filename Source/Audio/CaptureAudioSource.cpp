@@ -6,6 +6,7 @@ void CaptureAudioSource::prepare(double sampleRate, int maximumBlockSize, int ou
 {
     previewProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
     cabinetProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
+    cabinetIrProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
     previewScratchBuffer.setSize(juce::jmax(1, outputChannels),
                                  juce::jmax(1, maximumBlockSize),
                                  false,
@@ -156,6 +157,7 @@ juce::AudioBuffer<float> CaptureAudioSource::copyCapturedSignal() const
 
 bool CaptureAudioSource::loadPreviewModel(const CompactHansoModel& model)
 {
+    clearPreviewCabinetPackage();
     return previewProcessor.loadModel(model);
 }
 
@@ -169,6 +171,36 @@ void CaptureAudioSource::clearPreviewModel() noexcept
     stopPreviewSample();
     previewProcessor.clear();
     cabinetProcessor.reset();
+}
+
+bool CaptureAudioSource::loadPreviewCabinetPackage(const HansoPackage& package, juce::String& error)
+{
+    clearPreviewModel();
+    if (! cabinetIrProcessor.loadFromPackage(package, error))
+        return false;
+
+    return true;
+}
+
+void CaptureAudioSource::setPreviewMicPositionNormalized(float normalizedPosition) noexcept
+{
+    cabinetIrProcessor.setMicPositionNormalized(normalizedPosition);
+}
+
+void CaptureAudioSource::clearPreviewCabinetPackage() noexcept
+{
+    stopPreviewSample();
+    cabinetIrProcessor.clear();
+}
+
+bool CaptureAudioSource::hasPreviewCabinetPackage() const noexcept
+{
+    return cabinetIrProcessor.hasModel();
+}
+
+juce::String CaptureAudioSource::previewCabinetSummary() const
+{
+    return cabinetIrProcessor.summary();
 }
 
 void CaptureAudioSource::loadPreviewSample(const juce::AudioBuffer<float>& sample)
@@ -188,6 +220,7 @@ bool CaptureAudioSource::startPreviewSample() noexcept
     setMonitoringEnabled(false);
     previewProcessor.reset();
     cabinetProcessor.reset();
+    cabinetIrProcessor.reset();
     previewSamplePlayhead.store(0);
     previewSampleRunning.store(true);
     return true;
@@ -199,6 +232,7 @@ void CaptureAudioSource::stopPreviewSample() noexcept
     previewSamplePlayhead.store(0);
     previewProcessor.reset();
     cabinetProcessor.reset();
+    cabinetIrProcessor.reset();
 }
 
 bool CaptureAudioSource::isPreviewSamplePlaying() const noexcept
@@ -505,9 +539,14 @@ void CaptureAudioSource::process(const float* const* inputChannelData,
         }
 
         const auto inputChannelsForPreview = juce::jmin(previewScratchBuffer.getNumChannels(), 2);
-        if (previewProcessor.hasModel())
+        const auto* const* previewInputs = previewScratchBuffer.getArrayOfReadPointers();
+
+        if (cabinetIrProcessor.hasModel())
         {
-            const auto* const* previewInputs = previewScratchBuffer.getArrayOfReadPointers();
+            cabinetIrProcessor.process(previewInputs, inputChannelsForPreview, outputBuffer, samplesWritten);
+        }
+        else if (previewProcessor.hasModel())
+        {
             previewProcessor.process(previewInputs, inputChannelsForPreview, outputBuffer);
             if (previewCabinetEnabled.load())
                 cabinetProcessor.process(outputBuffer, samplesWritten);

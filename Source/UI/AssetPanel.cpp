@@ -40,13 +40,26 @@ AssetPanel::AssetPanel(ApplicationState& state)
     notesEditor.onTextChange = [this] { updatePackageMetadata(); };
     addAndMakeVisible(notesEditor);
 
+    micTypeLabel.setText("Mic Type", juce::dontSendNotification);
+    addAndMakeVisible(micTypeLabel);
+    micTypeEditor.setText(appState.currentPackage().metadata.sourceDevice);
+    micTypeEditor.onTextChange = [this] { updatePackageMetadata(); };
+    addAndMakeVisible(micTypeEditor);
+
+    speakerDescriptionLabel.setText("Speaker / Cab", juce::dontSendNotification);
+    addAndMakeVisible(speakerDescriptionLabel);
+    speakerDescriptionEditor.setMultiLine(true);
+    speakerDescriptionEditor.onTextChange = [this] { updatePackageMetadata(); };
+    addAndMakeVisible(speakerDescriptionEditor);
+
     categoryLabel.setText("Category", juce::dontSendNotification);
     addAndMakeVisible(categoryLabel);
 
     const auto categories = allHansoCategoryNames();
     for (int i = 0; i < categories.size(); ++i)
         categoryBox.addItem(categories[i], i + 1);
-    categoryBox.setSelectedId(1);
+    categoryBox.setSelectedId(categories.indexOf(toString(appState.currentPackage().metadata.category)) + 1,
+                              juce::dontSendNotification);
     categoryBox.onChange = [this] { updatePackageMetadata(); };
     addAndMakeVisible(categoryBox);
 
@@ -59,10 +72,12 @@ AssetPanel::AssetPanel(ApplicationState& state)
     exportButton.setButtonText("Let's HANSO!");
     exportButton.onClick = [this] { exportPackage(); };
     addAndMakeVisible(exportButton);
+    updateFieldVisibility();
 }
 
 void AssetPanel::refreshSummary()
 {
+    updateFieldVisibility();
     updatePackageSummary();
 }
 
@@ -70,35 +85,55 @@ void AssetPanel::resized()
 {
     auto area = getLocalBounds().reduced(contentMargin);
     title.setBounds(area.removeFromTop(36));
+    const auto cabinet = isCabinetExport();
 
     auto row = area.removeFromTop(32);
-    nameLabel.setBounds(row.removeFromLeft(100));
-    nameEditor.setBounds(row.removeFromLeft(320));
+    nameLabel.setBounds(row.removeFromLeft(120));
+    nameEditor.setBounds(row.removeFromLeft(340));
 
     area.removeFromTop(12);
     row = area.removeFromTop(32);
-    categoryLabel.setBounds(row.removeFromLeft(100));
+    categoryLabel.setBounds(row.removeFromLeft(120));
     categoryBox.setBounds(row.removeFromLeft(180));
 
     area.removeFromTop(12);
-    row = area.removeFromTop(32);
-    manufacturerLabel.setBounds(row.removeFromLeft(100));
-    manufacturerEditor.setBounds(row.removeFromLeft(320));
+    if (cabinet)
+    {
+        row = area.removeFromTop(32);
+        micTypeLabel.setBounds(row.removeFromLeft(120));
+        micTypeEditor.setBounds(row.removeFromLeft(340));
 
-    area.removeFromTop(12);
-    row = area.removeFromTop(32);
-    modelLabel.setBounds(row.removeFromLeft(100));
-    modelEditor.setBounds(row.removeFromLeft(320));
+        area.removeFromTop(12);
+        row = area.removeFromTop(76);
+        speakerDescriptionLabel.setBounds(row.removeFromLeft(120));
+        speakerDescriptionEditor.setBounds(row.removeFromLeft(460));
 
-    area.removeFromTop(12);
-    row = area.removeFromTop(32);
-    yearLabel.setBounds(row.removeFromLeft(100));
-    yearEditor.setBounds(row.removeFromLeft(120));
+        area.removeFromTop(16);
+        row = area.removeFromTop(84);
+        notesLabel.setBounds(row.removeFromLeft(120));
+        notesEditor.setBounds(row.removeFromLeft(460));
+    }
+    else
+    {
+        row = area.removeFromTop(32);
+        manufacturerLabel.setBounds(row.removeFromLeft(120));
+        manufacturerEditor.setBounds(row.removeFromLeft(340));
 
-    area.removeFromTop(24);
-    row = area.removeFromTop(96);
-    notesLabel.setBounds(row.removeFromLeft(100));
-    notesEditor.setBounds(row.removeFromLeft(460));
+        area.removeFromTop(12);
+        row = area.removeFromTop(32);
+        modelLabel.setBounds(row.removeFromLeft(120));
+        modelEditor.setBounds(row.removeFromLeft(340));
+
+        area.removeFromTop(12);
+        row = area.removeFromTop(32);
+        yearLabel.setBounds(row.removeFromLeft(120));
+        yearEditor.setBounds(row.removeFromLeft(120));
+
+        area.removeFromTop(24);
+        row = area.removeFromTop(96);
+        notesLabel.setBounds(row.removeFromLeft(120));
+        notesEditor.setBounds(row.removeFromLeft(460));
+    }
 
     area.removeFromTop(24);
     packageSummaryLabel.setBounds(area.removeFromTop(28));
@@ -112,12 +147,33 @@ void AssetPanel::updatePackageMetadata()
 {
     auto& metadata = appState.currentPackage().metadata;
     metadata.name = nameEditor.getText();
-    metadata.category = hansoCategoryFromString(categoryBox.getText());
-    metadata.manufacturer = manufacturerEditor.getText();
-    metadata.model = modelEditor.getText();
-    metadata.year = yearEditor.getText();
-    metadata.deviceType = categoryBox.getText();
     metadata.notes = notesEditor.getText();
+
+    if (isCabinetExport())
+    {
+        metadata.category = HansoCategory::Cabinet;
+        metadata.deviceType = "Cabinet";
+        metadata.model = nameEditor.getText();
+        metadata.sourceDevice = micTypeEditor.getText();
+        metadata.manufacturer = {};
+        metadata.year = {};
+        appState.currentPackage().cabinetProfile =
+            appState.captureWizard().toCabinetProfileVar(nameEditor.getText(),
+                                                         micTypeEditor.getText(),
+                                                         speakerDescriptionEditor.getText(),
+                                                         notesEditor.getText());
+        categoryBox.setSelectedId(allHansoCategoryNames().indexOf("Cabinet") + 1, juce::dontSendNotification);
+    }
+    else
+    {
+        metadata.category = hansoCategoryFromString(categoryBox.getText());
+        metadata.manufacturer = manufacturerEditor.getText();
+        metadata.model = modelEditor.getText();
+        metadata.year = yearEditor.getText();
+        metadata.deviceType = categoryBox.getText();
+        metadata.sourceDevice = {};
+        appState.currentPackage().cabinetProfile = juce::var();
+    }
 }
 
 void AssetPanel::updatePackageSummary()
@@ -140,12 +196,55 @@ void AssetPanel::updatePackageSummary()
     if (package.findChunk("model/compact-v1.hmodel") != nullptr)
         summary += " / compact realtime model";
 
+    if (appState.captureWizard().captureType == CaptureType::Cabinet)
+    {
+        int realSources = 0;
+        int estimated = 0;
+        for (const auto& slot : appState.captureWizard().cabinetSlots)
+        {
+            if (slot.hasRealSource())
+                ++realSources;
+            else if (slot.source == CabinetSlotSource::EstimatedCompactCab)
+                ++estimated;
+        }
+
+        summary += " / cabinet sources " + juce::String(realSources)
+                + " real, " + juce::String(estimated) + " estimated";
+    }
+
     if (! appState.captureWizard().isExportReady())
         summary += " / " + appState.captureWizard().exportDisabledReason();
     else if (appState.captureWizard().hasWarnings())
         summary += " / warnings";
 
     packageSummaryLabel.setText(summary, juce::dontSendNotification);
+}
+
+bool AssetPanel::isCabinetExport() const noexcept
+{
+    return appState.captureWizard().captureType == CaptureType::Cabinet;
+}
+
+void AssetPanel::updateFieldVisibility()
+{
+    const auto cabinet = isCabinetExport();
+    categoryBox.setEnabled(! cabinet);
+
+    manufacturerLabel.setVisible(! cabinet);
+    manufacturerEditor.setVisible(! cabinet);
+    modelLabel.setVisible(! cabinet);
+    modelEditor.setVisible(! cabinet);
+    yearLabel.setVisible(! cabinet);
+    yearEditor.setVisible(! cabinet);
+
+    micTypeLabel.setVisible(cabinet);
+    micTypeEditor.setVisible(cabinet);
+    speakerDescriptionLabel.setVisible(cabinet);
+    speakerDescriptionEditor.setVisible(cabinet);
+
+    nameLabel.setText(cabinet ? "Cabinet Name" : "Name", juce::dontSendNotification);
+    if (cabinet)
+        categoryBox.setSelectedId(allHansoCategoryNames().indexOf("Cabinet") + 1, juce::dontSendNotification);
 }
 
 void AssetPanel::exportPackage()

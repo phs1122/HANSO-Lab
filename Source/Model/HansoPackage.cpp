@@ -7,6 +7,8 @@ juce::var HansoPackage::createMetadataVar() const
     auto object = new juce::DynamicObject();
     object->setProperty("format", "hanso");
     object->setProperty("formatVersion", formatVersion);
+    object->setProperty("packageKind", "toneAsset");
+    object->setProperty("assetType", assetTypeForCategory(metadata.category));
     object->setProperty("name", metadata.name);
     object->setProperty("author", metadata.author);
     object->setProperty("createdBy", metadata.author);
@@ -34,9 +36,18 @@ juce::var HansoPackage::createMetadataVar() const
     object->setProperty("captureData", captureData);
     if (! captureWorkflow.isVoid())
         object->setProperty("captureWorkflow", captureWorkflow);
+    if (! cabinetProfile.isVoid())
+        object->setProperty("cabProfile", cabinetProfile);
 
     auto modelData = new juce::DynamicObject();
-    if (const auto* compactModel = findChunk("model/compact-v1.hmodel"))
+    if (metadata.category == HansoCategory::Cabinet)
+    {
+        modelData->setProperty("primaryModelType", "cabinet-mic-position-v1");
+        modelData->setProperty("algorithm", "hanso.cabinet.mic-position.v1");
+        modelData->setProperty("micPositionControlAvailable", true);
+        modelData->setProperty("realtimePreviewCompatible", true);
+    }
+    else if (const auto* compactModel = findChunk("model/compact-v1.hmodel"))
     {
         modelData->setProperty("compactModelChunkId", compactModel->id);
         modelData->setProperty("mediaType", compactModel->mediaType);

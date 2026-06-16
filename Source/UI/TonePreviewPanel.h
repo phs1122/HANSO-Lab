@@ -4,12 +4,20 @@
 
 #include "App/ApplicationState.h"
 #include "Capture/CaptureEngine.h"
+#include "Capture/CaptureType.h"
 #include "Model/CompactHansoModel.h"
 #include "Model/HansoPackage.h"
 #include "UI/PreviewWaveformComponent.h"
 
 namespace hanso
 {
+enum class PreviewSourceMode
+{
+    Clean,
+    AmpModel,
+    CabinetPackage
+};
+
 class TonePreviewPanel final : public juce::Component,
                                private juce::ListBoxModel,
                                private juce::Timer
@@ -35,6 +43,9 @@ private:
     void loadInitialPreviewModel();
     void loadModelFromPackage();
     bool loadModelFromHansoFile(const juce::File& file);
+    bool loadCabinetPackageFromFile(const juce::File& file, HansoPackage& package);
+    bool isCabinetPackage(const HansoPackage& package) const noexcept;
+    void applyPreviewControlLabels();
     bool loadCompactModelChunk(HansoPackage& package,
                                const juce::File& sourceFile,
                                CompactHansoModel& destination,
@@ -56,8 +67,10 @@ private:
     ApplicationState& appState;
     CaptureEngine& capture;
     CompactHansoModel model;
+    PreviewSourceMode previewSourceMode { PreviewSourceMode::Clean };
     bool modelReady { false };
     int observedPreviewRevision { -1 };
+    int observedPreviewCabinetRevision { -1 };
     juce::AudioFormatManager formatManager;
     juce::Array<juce::File> samples;
     std::unique_ptr<juce::FileChooser> importChooser;

@@ -3,11 +3,13 @@
 #include <JuceHeader.h>
 
 #include "Audio/InputChannelLayout.h"
+#include "Audio/PreviewCabinetIrProcessor.h"
 #include "Audio/PreviewCabinetProcessor.h"
 #include "Audio/PreviewModelProcessor.h"
 #include "Capture/OutputRoutingPolicy.h"
 #include "Capture/TestSignalGenerator.h"
 #include "Model/CompactHansoModel.h"
+#include "Model/HansoPackage.h"
 
 namespace hanso
 {
@@ -40,6 +42,11 @@ public:
     bool loadPreviewModel(const CompactHansoModel& model);
     void setPreviewGainPercent(float percent) noexcept;
     void clearPreviewModel() noexcept;
+    bool loadPreviewCabinetPackage(const HansoPackage& package, juce::String& error);
+    void setPreviewMicPositionNormalized(float normalizedPosition) noexcept;
+    void clearPreviewCabinetPackage() noexcept;
+    bool hasPreviewCabinetPackage() const noexcept;
+    juce::String previewCabinetSummary() const;
     void loadPreviewSample(const juce::AudioBuffer<float>& sample);
     bool startPreviewSample() noexcept;
     void stopPreviewSample() noexcept;
@@ -76,6 +83,7 @@ private:
     juce::AudioBuffer<float> previewScratchBuffer;
     PreviewModelProcessor previewProcessor;
     PreviewCabinetProcessor cabinetProcessor;
+    PreviewCabinetIrProcessor cabinetIrProcessor;
     std::atomic<int> playhead { 0 };
     std::atomic<int> calibrationPlayhead { 0 };
     std::atomic<bool> captureRunning { false };

@@ -6,6 +6,7 @@
 #include "App/LabWorkflow.h"
 #include "Capture/CaptureEngine.h"
 #include "Capture/CaptureMode.h"
+#include "Capture/CaptureType.h"
 #include "UI/CaptureStatusIcon.h"
 #include "UI/CaptureInputControls.h"
 #include "UI/LabPanel.h"
@@ -28,6 +29,9 @@ private:
     void timerCallback() override;
     void applyCaptureSettings(int startChannel, int channelCount);
     void syncWizardUi();
+    void rebuildStepRows();
+    void updateCaptureTypeFromSelector();
+    void applyCaptureType(CaptureType type);
     void selectStep(const juce::String& stepId);
     void updateModeFromButtons();
     void updateAdvancedVisibility();
@@ -35,6 +39,7 @@ private:
     void handleStepButtonClicked(const juce::String& stepId);
     void updateStepActions();
     void runFinishCaptureAnalysis();
+    void showImportIrChooser(const juce::String& stepId);
     void showAssetExportDialog();
     void updateCompletionActions();
     void showTonePreviewDialog();
@@ -48,6 +53,8 @@ private:
     LabWorkflow& labWorkflow;
     juce::Label title;
     juce::Label statusLabel;
+    juce::Label captureTypeLabel;
+    juce::ComboBox captureTypeBox;
     juce::TextButton standardModeButton { "Standard Capture" };
     juce::TextButton easyModeButton { "Easy Capture" };
     juce::ComboBox cableGuideBox;
@@ -59,6 +66,8 @@ private:
     juce::OwnedArray<juce::TextButton> stepRecaptureButtons;
     juce::OwnedArray<juce::TextButton> stepStopButtons;
     juce::OwnedArray<juce::TextButton> stepResetButtons;
+    juce::OwnedArray<juce::TextButton> stepImportButtons;
+    std::unique_ptr<juce::FileChooser> irImportChooser;
     juce::Label instructionTitleLabel;
     juce::Label instructionLabel;
     juce::TextButton generateButton { "Generate Test Signal" };

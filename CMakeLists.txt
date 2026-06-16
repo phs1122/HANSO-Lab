@@ -49,8 +49,10 @@ set(HANSO_LAB_APP_SOURCES
     Source/Audio/AudioEngine.cpp
     Source/Audio/CaptureAudioSource.cpp
     Source/Audio/PreviewCabinetProcessor.cpp
+    Source/Audio/PreviewCabinetIrProcessor.cpp
     Source/Audio/PreviewModelProcessor.cpp
     Source/Capture/CaptureEngine.cpp
+    Source/Capture/CabinetIrImporter.cpp
     Source/Capture/CaptureRecipe.cpp
     Source/Capture/CaptureSession.cpp
     Source/Capture/CaptureWizardState.cpp

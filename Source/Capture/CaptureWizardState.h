@@ -3,8 +3,10 @@
 #include <JuceHeader.h>
 
 #include "Analysis/CaptureQualityReport.h"
+#include "Capture/CabinetCaptureState.h"
 #include "Capture/CaptureMode.h"
 #include "Capture/CaptureRecipe.h"
+#include "Capture/CaptureType.h"
 
 namespace hanso
 {
@@ -22,14 +24,18 @@ class CaptureWizardState final
 {
 public:
     CaptureWizardState();
+    explicit CaptureWizardState(CaptureType type);
 
+    CaptureType captureType { CaptureType::Amp };
     CaptureMode mode { CaptureMode::Easy };
     CableGuideType cableGuide { CableGuideType::NormalTsCable };
     CaptureRecipe recipe;
     juce::String currentStepId;
     bool calibrationPassed { false };
     bool warningExportAccepted { false };
+    std::vector<CabinetMicPositionSlot> cabinetSlots;
 
+    void setCaptureType(CaptureType type);
     CaptureStep* findStep(const juce::String& stepId) noexcept;
     const CaptureStep* findStep(const juce::String& stepId) const noexcept;
     CaptureStep* firstIncompleteRequiredStep() noexcept;
@@ -43,6 +49,20 @@ public:
     bool isExportReady() const noexcept;
     juce::String exportDisabledReason() const;
     juce::var toMetadataVar() const;
+    CabinetMicPositionSlot* findCabinetSlot(const juce::String& stepId) noexcept;
+    const CabinetMicPositionSlot* findCabinetSlot(const juce::String& stepId) const noexcept;
+    void markCabinetSlotCaptured(const juce::String& stepId, const juce::String& chunkId);
+    void markCabinetSlotImported(const juce::String& stepId, const juce::String& chunkId, const juce::String& sourceFileName);
+    void markCabinetSlotCapturing(const juce::String& stepId);
+    void markCabinetSlotError(const juce::String& stepId, const juce::String& error);
+    void resetCabinetSlot(const juce::String& stepId);
+    bool hasCabinetRealSource() const noexcept;
+    juce::StringArray cabinetRealSourceIds() const;
+    void estimateEmptyCabinetSlots();
+    juce::var toCabinetProfileVar(const juce::String& cabinetName,
+                                  const juce::String& micType,
+                                  const juce::String& speakerDescription,
+                                  const juce::String& notes) const;
 
 private:
     std::vector<CaptureStepResult> results;

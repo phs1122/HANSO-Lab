@@ -9,6 +9,7 @@
 #include "Capture/EasyCaptureSafetyPolicy.h"
 #include "Capture/SignalAlignment.h"
 #include "Model/CompactHansoModel.h"
+#include "Model/HansoPackage.h"
 
 namespace hanso
 {
@@ -28,6 +29,8 @@ public:
     void startCaptureStep(const juce::String& stepId);
     void completeNonAudioStep(const juce::String& stepId);
     void resetCaptureStep(const juce::String& stepId);
+    bool importCabinetIrForStep(const juce::String& stepId, const juce::File& file);
+    bool buildCabinetFromSlots();
     void setCalibrationOutputDb(float dbFs);
     float calibrationOutputDb() const noexcept;
     void startCalibrationMonitor();
@@ -59,6 +62,11 @@ public:
     bool loadPreviewModel(const CompactHansoModel& model);
     void setPreviewGainPercent(float percent);
     void clearPreviewModel();
+    bool loadPreviewCabinetPackage(const HansoPackage& package);
+    void setPreviewMicPositionPercent(float percent);
+    void clearPreviewCabinetPackage();
+    bool hasPreviewCabinetPackage() const noexcept;
+    int previewCabinetRevision() const noexcept;
     const CompactHansoModel* currentPreviewModel() const noexcept;
     int previewModelRevision() const noexcept;
     void loadPreviewSample(const juce::AudioBuffer<float>& sample);
@@ -92,5 +100,7 @@ private:
     CompactHansoModel previewModel;
     bool previewModelLoaded { false };
     int previewRevision { 0 };
+    int previewCabinetRevisionCounter { 0 };
+    bool previewCabinetLoaded { false };
 };
 }

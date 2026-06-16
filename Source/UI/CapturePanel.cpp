@@ -16,6 +16,16 @@ juce::String modeDescription(CaptureMode mode)
     return utf8("정식 캡쳐\nLine Out → 리앰프 박스 → 장비 Input\n가장 정확한 방식입니다.");
 }
 
+juce::String workflowDescription(const CaptureWizardState& wizard)
+{
+    if (wizard.captureType == CaptureType::Cabinet)
+    {
+        return utf8("캐비넷 캡쳐\nCenter / Edge / Cone / Off-Axis 슬롯 중 원하는 위치를 직접 캡쳐하거나 IR로 가져올 수 있습니다.\n비워둔 위치는 Finish 단계에서 실제 source를 기반으로 추정됩니다.");
+    }
+
+    return modeDescription(wizard.mode);
+}
+
 juce::String cableGuideText(CableGuideType type)
 {
     if (type == CableGuideType::TrsToDualTsYCable)
@@ -55,6 +65,11 @@ bool isComplete(CaptureStepStatus status) noexcept
 bool isGainCaptureStep(const CaptureStep& step) noexcept
 {
     return step.anchor.parameterKey == "gain";
+}
+
+bool isCabinetPositionStep(const CaptureStep& step) noexcept
+{
+    return step.anchor.parameterKey == "cabinet-position";
 }
 
 juce::String firstIncompleteGainStepId(const CaptureWizardState& wizard)
@@ -118,6 +133,22 @@ CapturePanel::CapturePanel(ApplicationState& state, CaptureEngine& captureEngine
     styleSectionTitle(title, "Capture Wizard");
     addAndMakeVisible(title);
 
+    captureTypeLabel.setText("Capture Type", juce::dontSendNotification);
+    captureTypeLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(captureTypeLabel);
+
+    captureTypeBox.addItem("Amp", 1);
+    captureTypeBox.addItem("Cabinet", 2);
+    captureTypeBox.addItem("Pedal", 3);
+    captureTypeBox.addItem("Effect", 4);
+    captureTypeBox.addItem("Full Rig", 5);
+    captureTypeBox.setItemEnabled(3, false);
+    captureTypeBox.setItemEnabled(4, false);
+    captureTypeBox.setItemEnabled(5, false);
+    captureTypeBox.setSelectedId(1, juce::dontSendNotification);
+    captureTypeBox.onChange = [this] { updateCaptureTypeFromSelector(); };
+    addAndMakeVisible(captureTypeBox);
+
     standardModeButton.setButtonText(utf8("정식 캡쳐"));
     easyModeButton.setButtonText(utf8("간편 캡쳐"));
     standardModeButton.setClickingTogglesState(true);
@@ -150,55 +181,7 @@ CapturePanel::CapturePanel(ApplicationState& state, CaptureEngine& captureEngine
     safetyWarningLabel.setText(utf8("앰프의 Speaker Out을 오디오 인터페이스 Input에 직접 연결하지 마세요.\n반드시 스피커 캐비넷+마이크 또는 적절한 로드박스를 사용해야 합니다."), juce::dontSendNotification);
     addAndMakeVisible(safetyWarningLabel);
 
-    for (const auto& step : appState.captureWizard().recipe.steps)
-    {
-        auto* icon = new CaptureStatusIcon();
-        if (step.stepId == "setup")
-            icon->onClick = [this] { capture.completeNonAudioStep("setup"); syncWizardUi(); };
-        addAndMakeVisible(icon);
-        stepIcons.add(icon);
-
-        auto* button = new juce::TextButton(step.title);
-        button->onClick = [this, id = step.stepId] { handleStepButtonClicked(id); };
-        addAndMakeVisible(button);
-        stepButtons.add(button);
-
-        auto* start = new juce::TextButton("Start Capture");
-        start->onClick = [this, id = step.stepId]
-        {
-            selectStep(id);
-            showBusyOverlay("Capturing...", "Sending test signal and recording the return.", false);
-            capture.startCaptureStep(id);
-            syncWizardUi();
-        };
-        addAndMakeVisible(start);
-        stepStartButtons.add(start);
-
-        auto* recapture = new juce::TextButton("Re-Capture");
-        recapture->onClick = [this, id = step.stepId]
-        {
-            selectStep(id);
-            showBusyOverlay("Capturing...", "Re-capturing this gain anchor.", false);
-            capture.startCaptureStep(id);
-            syncWizardUi();
-        };
-        addAndMakeVisible(recapture);
-        stepRecaptureButtons.add(recapture);
-
-        auto* stop = new juce::TextButton("Stop");
-        stop->onClick = [this] { capture.stop(); hideBusyOverlay(); syncWizardUi(); };
-        addAndMakeVisible(stop);
-        stepStopButtons.add(stop);
-
-        auto* reset = new juce::TextButton("Reset");
-        reset->onClick = [this, id = step.stepId]
-        {
-            capture.resetCaptureStep(id);
-            syncWizardUi();
-        };
-        addAndMakeVisible(reset);
-        stepResetButtons.add(reset);
-    }
+    rebuildStepRows();
 
     instructionTitleLabel.setFont(juce::Font(20.0f, juce::Font::bold));
     addAndMakeVisible(instructionTitleLabel);
@@ -324,6 +307,75 @@ CapturePanel::CapturePanel(ApplicationState& state, CaptureEngine& captureEngine
     updateModeFromButtons();
 }
 
+void CapturePanel::rebuildStepRows()
+{
+    stepIcons.clear(true);
+    stepButtons.clear(true);
+    stepStartButtons.clear(true);
+    stepRecaptureButtons.clear(true);
+    stepStopButtons.clear(true);
+    stepResetButtons.clear(true);
+    stepImportButtons.clear(true);
+
+    for (const auto& step : appState.captureWizard().recipe.steps)
+    {
+        auto* icon = new CaptureStatusIcon();
+        if (step.stepId == "setup")
+            icon->onClick = [this] { capture.completeNonAudioStep("setup"); syncWizardUi(); };
+        addAndMakeVisible(icon);
+        stepIcons.add(icon);
+
+        auto* button = new juce::TextButton(step.title);
+        button->onClick = [this, id = step.stepId] { handleStepButtonClicked(id); };
+        addAndMakeVisible(button);
+        stepButtons.add(button);
+
+        auto* start = new juce::TextButton("Start");
+        start->onClick = [this, id = step.stepId]
+        {
+            selectStep(id);
+            showBusyOverlay("Capturing...", "Sending test signal and recording the return.", false);
+            capture.startCaptureStep(id);
+            syncWizardUi();
+        };
+        addAndMakeVisible(start);
+        stepStartButtons.add(start);
+
+        auto* recapture = new juce::TextButton("Re-Capture");
+        recapture->onClick = [this, id = step.stepId]
+        {
+            selectStep(id);
+            showBusyOverlay("Capturing...", "Re-capturing this slot.", false);
+            capture.startCaptureStep(id);
+            syncWizardUi();
+        };
+        addAndMakeVisible(recapture);
+        stepRecaptureButtons.add(recapture);
+
+        auto* stop = new juce::TextButton("Stop");
+        stop->onClick = [this] { capture.stop(); hideBusyOverlay(); syncWizardUi(); };
+        addAndMakeVisible(stop);
+        stepStopButtons.add(stop);
+
+        auto* reset = new juce::TextButton("Reset");
+        reset->onClick = [this, id = step.stepId]
+        {
+            capture.resetCaptureStep(id);
+            syncWizardUi();
+        };
+        addAndMakeVisible(reset);
+        stepResetButtons.add(reset);
+
+        auto* importIr = new juce::TextButton("Import IR");
+        importIr->onClick = [this, id = step.stepId] { showImportIrChooser(id); };
+        addAndMakeVisible(importIr);
+        stepImportButtons.add(importIr);
+    }
+
+    resized();
+    syncWizardUi();
+}
+
 void CapturePanel::startUpdating()
 {
     startTimerHz(6);
@@ -335,6 +387,9 @@ void CapturePanel::resized()
     title.setBounds(area.removeFromTop(36));
 
     auto top = area.removeFromTop(44);
+    captureTypeLabel.setBounds(top.removeFromLeft(92).reduced(0, 5));
+    captureTypeBox.setBounds(top.removeFromLeft(130).reduced(0, 5));
+    top.removeFromLeft(12);
     standardModeButton.setBounds(top.removeFromLeft(140).reduced(0, 3));
     top.removeFromLeft(8);
     easyModeButton.setBounds(top.removeFromLeft(140).reduced(0, 3));
@@ -362,15 +417,17 @@ void CapturePanel::resized()
         auto row = left.removeFromTop(34);
         auto iconArea = row.removeFromLeft(34);
         stepIcons[i]->setBounds(iconArea.withSizeKeepingCentre(28, 28));
-        stepButtons[i]->setBounds(row.removeFromLeft(220).reduced(0, 2));
+        stepButtons[i]->setBounds(row.removeFromLeft(190).reduced(0, 2));
         row.removeFromLeft(8);
-        stepStartButtons[i]->setBounds(row.removeFromLeft(106).reduced(0, 2));
+        stepStartButtons[i]->setBounds(row.removeFromLeft(76).reduced(0, 2));
         row.removeFromLeft(6);
-        stepRecaptureButtons[i]->setBounds(row.removeFromLeft(106).reduced(0, 2));
+        stepRecaptureButtons[i]->setBounds(row.removeFromLeft(94).reduced(0, 2));
         row.removeFromLeft(6);
-        stepStopButtons[i]->setBounds(row.removeFromLeft(62).reduced(0, 2));
+        stepStopButtons[i]->setBounds(row.removeFromLeft(54).reduced(0, 2));
         row.removeFromLeft(6);
-        stepResetButtons[i]->setBounds(row.removeFromLeft(62).reduced(0, 2));
+        stepResetButtons[i]->setBounds(row.removeFromLeft(54).reduced(0, 2));
+        row.removeFromLeft(6);
+        stepImportButtons[i]->setBounds(row.removeFromLeft(82).reduced(0, 2));
         left.removeFromTop(4);
     }
 
@@ -468,6 +525,8 @@ void CapturePanel::paintOverChildren(juce::Graphics& g)
         return;
 
     drawDebugBounds(g, title, "title", juce::Colours::yellow);
+    drawDebugBounds(g, captureTypeLabel, "captureTypeLabel", juce::Colours::orange);
+    drawDebugBounds(g, captureTypeBox, "captureType", juce::Colours::orange);
     drawDebugBounds(g, standardModeButton, "standardMode", juce::Colours::orange);
     drawDebugBounds(g, easyModeButton, "easyMode", juce::Colours::orange);
     drawDebugBounds(g, cableGuideBox, "cableGuide", juce::Colours::orange);
@@ -507,6 +566,7 @@ void CapturePanel::paintOverChildren(juce::Graphics& g)
         drawDebugBounds(g, *stepRecaptureButtons[i], "recap" + juce::String(i + 1), juce::Colours::limegreen);
         drawDebugBounds(g, *stepStopButtons[i], "stop" + juce::String(i + 1), juce::Colours::limegreen);
         drawDebugBounds(g, *stepResetButtons[i], "reset" + juce::String(i + 1), juce::Colours::limegreen);
+        drawDebugBounds(g, *stepImportButtons[i], "import" + juce::String(i + 1), juce::Colours::limegreen);
     }
 }
 
@@ -547,10 +607,68 @@ void CapturePanel::applyCaptureSettings(int startChannel, int channelCount)
     appState.appendLog("Capture routing updated from Capture tab.");
 }
 
+void CapturePanel::updateCaptureTypeFromSelector()
+{
+    const auto selectedType = captureTypeBox.getSelectedId() == 2 ? CaptureType::Cabinet
+                                                                  : CaptureType::Amp;
+    if (selectedType == appState.captureWizard().captureType)
+        return;
+
+    if (! appState.hasUnsavedCaptureData())
+    {
+        applyCaptureType(selectedType);
+        return;
+    }
+
+    auto options = juce::MessageBoxOptions()
+        .withIconType(juce::MessageBoxIconType::WarningIcon)
+        .withTitle("Change Capture Type?")
+        .withMessage(utf8("캡쳐 타입을 변경하면 저장되지 않은 현재 캡쳐 데이터가 삭제됩니다.\n계속할까요?"))
+        .withButton("Change Type")
+        .withButton("Cancel")
+        .withAssociatedComponent(this);
+
+    juce::AlertWindow::showAsync(options, [this, selectedType](int result)
+    {
+        if (result == 1)
+        {
+            applyCaptureType(selectedType);
+            return;
+        }
+
+        captureTypeBox.setSelectedId(appState.captureWizard().captureType == CaptureType::Cabinet ? 2 : 1,
+                                     juce::dontSendNotification);
+    });
+}
+
+void CapturePanel::applyCaptureType(CaptureType type)
+{
+    capture.stopOutputSignal();
+    capture.reset();
+    appState.resetForNewCapture();
+    appState.captureWizard().setCaptureType(type);
+
+    auto& package = appState.currentPackage();
+    package.metadata.name = "Untitled HANSO Asset";
+    package.metadata.category = categoryForCaptureType(type);
+    package.metadata.deviceType = toString(type);
+    package.captureWorkflow = appState.captureWizard().toMetadataVar();
+
+    analysisSummaryLabel.setText(type == CaptureType::Cabinet
+                                     ? "Finish / Build Cabinet prepares cabinet mic-position package metadata."
+                                     : "Finish Capture runs analysis and validation before export.",
+                                 juce::dontSendNotification);
+    hideBusyOverlay();
+    rebuildStepRows();
+    updateModeFromButtons();
+    appState.appendLog("Capture type changed to " + toString(type) + ".");
+}
+
 void CapturePanel::syncWizardUi()
 {
     const auto& wizard = appState.captureWizard();
-    connectionGuideLabel.setText(modeDescription(wizard.mode) + "\n\n" + cableGuideText(wizard.cableGuide), juce::dontSendNotification);
+    captureTypeBox.setSelectedId(wizard.captureType == CaptureType::Cabinet ? 2 : 1, juce::dontSendNotification);
+    connectionGuideLabel.setText(workflowDescription(wizard) + "\n\n" + cableGuideText(wizard.cableGuide), juce::dontSendNotification);
 
     for (int i = 0; i < static_cast<int>(wizard.recipe.steps.size()) && i < stepIcons.size(); ++i)
     {
@@ -589,7 +707,23 @@ void CapturePanel::syncWizardUi()
         }
         else
         {
-            stepButtons[i]->setButtonText(rowStep.title);
+            juce::String titleText = rowStep.title;
+            if (wizard.captureType == CaptureType::Cabinet)
+            {
+                if (const auto* slot = wizard.findCabinetSlot(rowStep.stepId))
+                {
+                    titleText += " · " + toString(slot->source);
+                    if (slot->sourceFileName.isNotEmpty())
+                        stepButtons[i]->setTooltip("Imported: " + slot->sourceFileName);
+                    else if (slot->estimatedFrom.isNotEmpty())
+                        stepButtons[i]->setTooltip("Estimated from: " + slot->estimatedFrom);
+                    else if (slot->errorMessage.isNotEmpty())
+                        stepButtons[i]->setTooltip(slot->errorMessage);
+                    else
+                        stepButtons[i]->setTooltip({});
+                }
+            }
+            stepButtons[i]->setButtonText(titleText);
         }
     }
 
@@ -647,8 +781,25 @@ void CapturePanel::handleStepButtonClicked(const juce::String& stepId)
     }
     else if (stepId == "final-validation")
     {
-        if (setupAndCalibrationComplete(wizard) && firstIncompleteGainStepId(wizard).isEmpty())
+        if (wizard.captureType == CaptureType::Cabinet)
+        {
+            if (! setupAndCalibrationComplete(wizard))
+            {
+                appState.appendLog("Cabinet build requires setup and calibration first.");
+            }
+            else if (! wizard.hasCabinetRealSource())
+            {
+                appState.appendLog(utf8("캐비넷을 내보내려면 최소 1개 이상의 마이크 위치를 캡쳐하거나 IR로 가져와야 합니다."));
+            }
+            else if (capture.buildCabinetFromSlots())
+            {
+                appState.currentPackage().captureWorkflow = wizard.toMetadataVar();
+            }
+        }
+        else if (setupAndCalibrationComplete(wizard) && firstIncompleteGainStepId(wizard).isEmpty())
+        {
             runFinishCaptureAnalysis();
+        }
     }
 
     syncWizardUi();
@@ -688,7 +839,7 @@ void CapturePanel::updateCalibrationMeter()
 
     juce::String outputState;
     if (outputDb < -42.0f)
-        outputState = utf8("낮음: 위 슬라이더로 앱 출력을 올리세요.");
+        outputState = utf8("낮음: 앱 테스트 신호가 너무 작습니다.");
     else if (outputDb > -24.0f)
         outputState = utf8("높음: 앱 테스트 신호가 너무 큽니다.");
     else
@@ -698,7 +849,7 @@ void CapturePanel::updateCalibrationMeter()
                                         + juce::String(outputDb, 1)
                                         + " dBFS / Target "
                                         + juce::String(capture.calibrationOutputDb(), 1)
-                                        + " dBFS\n"
+                                        + " dBFS\nTarget -42 to -24 / "
                                         + outputState,
                                         juce::dontSendNotification);
 
@@ -743,6 +894,31 @@ void CapturePanel::runFinishCaptureAnalysis()
     });
 }
 
+void CapturePanel::showImportIrChooser(const juce::String& stepId)
+{
+    auto& wizard = appState.captureWizard();
+    const auto* step = wizard.findStep(stepId);
+    if (step == nullptr || ! isCabinetPositionStep(*step))
+        return;
+
+    irImportChooser = std::make_unique<juce::FileChooser>("Import cabinet IR",
+                                                          juce::File::getSpecialLocation(juce::File::userHomeDirectory),
+                                                          "*.wav");
+    irImportChooser->launchAsync(juce::FileBrowserComponent::openMode
+                                     | juce::FileBrowserComponent::canSelectFiles,
+        [this, stepId](const juce::FileChooser& chooser)
+        {
+            const auto file = chooser.getResult();
+            if (file != juce::File())
+            {
+                capture.importCabinetIrForStep(stepId, file);
+                syncWizardUi();
+            }
+
+            irImportChooser = nullptr;
+        });
+}
+
 void CapturePanel::showAssetExportDialog()
 {
     if (! appState.captureWizard().isExportReady())
@@ -779,10 +955,16 @@ void CapturePanel::confirmStartNewCapture()
     {
         if (result == 1)
         {
+            const auto currentType = appState.captureWizard().captureType;
             capture.reset();
             appState.resetForNewCapture();
+            appState.captureWizard().setCaptureType(currentType);
+            appState.currentPackage().metadata.category = categoryForCaptureType(currentType);
+            appState.currentPackage().metadata.deviceType = toString(currentType);
+            appState.currentPackage().captureWorkflow = appState.captureWizard().toMetadataVar();
             analysisSummaryLabel.setText("Finish Capture runs analysis and validation before export.", juce::dontSendNotification);
             hideBusyOverlay();
+            rebuildStepRows();
             selectStep(appState.captureWizard().currentStepId);
             updateModeFromButtons();
             appState.appendLog("Started a new capture workflow.");
@@ -863,8 +1045,8 @@ void CapturePanel::updateBusyOverlay()
 void CapturePanel::updateStepActions()
 {
     const auto& wizard = appState.captureWizard();
-    const auto gainsUnlocked = setupAndCalibrationComplete(wizard);
-    const auto activeGainStepId = gainsUnlocked ? firstIncompleteGainStepId(wizard) : juce::String();
+    const auto audioStepsUnlocked = setupAndCalibrationComplete(wizard);
+    const auto activeGainStepId = audioStepsUnlocked ? firstIncompleteGainStepId(wizard) : juce::String();
     const auto activeRecordingStepId = capture.state() == CaptureSessionState::Recording
                                      ? capture.activeCaptureStepId()
                                      : juce::String();
@@ -873,25 +1055,37 @@ void CapturePanel::updateStepActions()
     {
         const auto& step = wizard.recipe.steps[static_cast<size_t>(i)];
         const auto isGain = isGainCaptureStep(step);
+        const auto isCabSlot = isCabinetPositionStep(step);
         const auto completed = isComplete(step.status);
-        const auto isActiveGain = gainsUnlocked && step.stepId == activeGainStepId;
+        const auto isActiveGain = audioStepsUnlocked && step.stepId == activeGainStepId;
         const auto isRecordingThisStep = activeRecordingStepId == step.stepId;
-        const auto showCaptureActions = isGain && gainsUnlocked && (completed || isActiveGain || isRecordingThisStep);
+        const auto hasCaptureData = wizard.findResult(step.stepId) != nullptr;
+        const auto hasCabinetData = isCabSlot
+                                 && wizard.findCabinetSlot(step.stepId) != nullptr
+                                 && wizard.findCabinetSlot(step.stepId)->hasAnyData();
+        const auto showAmpCaptureActions = isGain && audioStepsUnlocked && (completed || isActiveGain || isRecordingThisStep);
+        const auto showCabinetCaptureActions = isCabSlot && audioStepsUnlocked;
+        const auto showCaptureActions = showAmpCaptureActions || showCabinetCaptureActions;
 
         stepStartButtons[i]->setVisible(showCaptureActions);
         stepRecaptureButtons[i]->setVisible(showCaptureActions);
         stepStopButtons[i]->setVisible(showCaptureActions);
-        const auto hasCaptureData = wizard.findResult(step.stepId) != nullptr;
-        stepResetButtons[i]->setVisible(isGain && hasCaptureData);
-        stepResetButtons[i]->setEnabled(isGain && hasCaptureData);
+        stepImportButtons[i]->setVisible(showCabinetCaptureActions);
+        stepResetButtons[i]->setVisible((isGain && hasCaptureData) || (isCabSlot && hasCabinetData));
+        stepResetButtons[i]->setEnabled((isGain && hasCaptureData) || (isCabSlot && hasCabinetData));
 
-        const auto captureControlsEnabled = isActiveGain || isRecordingThisStep;
+        const auto captureControlsEnabled = (isGain && (isActiveGain || isRecordingThisStep))
+                                         || (isCabSlot && audioStepsUnlocked);
         stepStartButtons[i]->setEnabled(captureControlsEnabled && ! isRecordingThisStep);
         stepRecaptureButtons[i]->setEnabled(captureControlsEnabled
                                             && ! isRecordingThisStep
-                                            && (step.status == CaptureStepStatus::Failed
-                                                || step.status == CaptureStepStatus::Warning));
+                                            && ((isGain && (step.status == CaptureStepStatus::Failed
+                                                           || step.status == CaptureStepStatus::Warning))
+                                                || (isCabSlot && hasCabinetData)));
         stepStopButtons[i]->setEnabled(isRecordingThisStep);
+        stepImportButtons[i]->setEnabled(isCabSlot
+                                         && audioStepsUnlocked
+                                         && capture.state() != CaptureSessionState::Recording);
     }
 }
 }

@@ -1,6 +1,7 @@
 #include "Capture/CaptureEngine.h"
 
 #include "Audio/AudioMetrics.h"
+#include "Capture/CabinetIrImporter.h"
 #include "Serialization/HansoAudioChunkCodec.h"
 
 namespace hanso
@@ -14,6 +15,9 @@ constexpr float calibrationOutputMaxDb = -24.0f;
 
 juce::String dryChunkIdForStep(const CaptureStep& step)
 {
+    if (step.anchor.parameterKey == "cabinet-position")
+        return "capture/shared/cabinet-dry-reference.pcm16";
+
     return step.isAnchorCapture() ? "capture/shared/dry-reference.pcm16" : "capture/" + step.stepId + "/dry-reference.pcm16";
 }
 
@@ -24,7 +28,42 @@ juce::String capturedChunkIdForStep(const CaptureStep& step)
 
 juce::String alignedChunkIdForStep(const CaptureStep& step)
 {
+    if (step.anchor.parameterKey == "cabinet-position")
+        return "cabinet/positions/" + step.stepId + "/ir.pcm16";
+
     return step.isAnchorCapture() ? step.anchor.chunkPathPrefix() + "/aligned-captured.pcm16" : "capture/" + step.stepId + "/aligned-captured.pcm16";
+}
+
+bool isCabinetPositionStep(const CaptureStep& step) noexcept
+{
+    return step.anchor.parameterKey == "cabinet-position";
+}
+
+bool isCabinetWorkflow(const CaptureWizardState& wizard) noexcept
+{
+    return wizard.captureType == CaptureType::Cabinet;
+}
+
+void configurePackageForCaptureType(HansoPackage& package, const CaptureWizardState& wizard)
+{
+    package.formatVersion = 2;
+    package.metadata.category = categoryForCaptureType(wizard.captureType);
+    package.metadata.deviceType = toString(wizard.captureType);
+}
+
+void unlockPostCalibrationSteps(CaptureWizardState& wizard)
+{
+    if (wizard.captureType == CaptureType::Cabinet)
+    {
+        for (auto& step : wizard.recipe.steps)
+            if (step.anchor.parameterKey == "cabinet-position" && step.status == CaptureStepStatus::NotStarted)
+                step.status = CaptureStepStatus::Ready;
+        return;
+    }
+
+    if (auto* next = wizard.findStep("gain-010"))
+        if (next->status == CaptureStepStatus::NotStarted)
+            next->status = CaptureStepStatus::Ready;
 }
 
 CaptureStepStatus statusFromQuality(const CaptureQualityReport& report) noexcept
@@ -113,7 +152,7 @@ void CaptureEngine::generateTestSignal(TestSignalType type, double durationSecon
     session.createNew(audio.currentSampleRate(), captureChannels, spec, std::move(drySignal));
 
     auto& package = appState.currentPackage();
-    package.formatVersion = 2;
+    configurePackageForCaptureType(package, appState.captureWizard());
     package.clearChunks();
     package.metadata.sampleRate = spec.sampleRate;
     package.metadata.numInputChannels = captureChannels;
@@ -209,7 +248,7 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
 
     if (wizard.mode == CaptureMode::Easy && step->isAnchorCapture() && ! wizard.calibrationPassed)
     {
-        appState.appendLog("Easy Capture calibration must pass before gain anchor capture.");
+        appState.appendLog("Easy Capture calibration must pass before audio capture.");
         return;
     }
 
@@ -233,7 +272,7 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
     session.createNew(audio.currentSampleRate(), captureChannels, spec, std::move(drySignal));
 
     auto& package = appState.currentPackage();
-    package.formatVersion = 2;
+    configurePackageForCaptureType(package, wizard);
     package.metadata.sampleRate = spec.sampleRate;
     package.metadata.numInputChannels = captureChannels;
     package.metadata.numOutputChannels = wizard.mode == CaptureMode::Easy ? 1 : 2;
@@ -246,6 +285,9 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
 
     if (package.findChunk(dryChunkIdForStep(*step)) == nullptr)
         setPcm16AudioChunk(package, dryChunkIdForStep(*step), "dryReference", session.dryReferenceSignal(), spec.sampleRate);
+
+    if (isCabinetPositionStep(*step))
+        wizard.markCabinetSlotCapturing(stepId);
 
     wizard.setStepStatus(stepId, CaptureStepStatus::InProgress);
     package.captureWorkflow = wizard.toMetadataVar();
@@ -300,12 +342,90 @@ void CaptureEngine::resetCaptureStep(const juce::String& stepId)
         package.removeChunk(dryChunkIdForStep(*step));
     package.removeChunk(capturedChunkIdForStep(*step));
     package.removeChunk(alignedChunkIdForStep(*step));
+    if (isCabinetPositionStep(*step))
+        wizard.resetCabinetSlot(stepId);
     wizard.removeResult(stepId);
     wizard.setStepStatus(stepId, CaptureStepStatus::Ready);
     wizard.currentStepId = stepId;
     package.captureWorkflow = wizard.toMetadataVar();
 
     appState.appendLog("Reset guided capture step: " + step->title);
+}
+
+bool CaptureEngine::importCabinetIrForStep(const juce::String& stepId, const juce::File& file)
+{
+    auto& wizard = appState.captureWizard();
+    auto* step = wizard.findStep(stepId);
+    if (step == nullptr || ! isCabinetPositionStep(*step))
+    {
+        appState.appendLog("Import IR is only available for cabinet position slots.");
+        return false;
+    }
+
+    CabinetIrImporter importer;
+    auto result = importer.importFile(file);
+    if (! result.success)
+    {
+        wizard.markCabinetSlotError(stepId, result.error);
+        wizard.setStepStatus(stepId, CaptureStepStatus::Failed);
+        appState.currentPackage().captureWorkflow = wizard.toMetadataVar();
+        appState.appendLog("IR import failed for " + step->title + ": " + result.error);
+        return false;
+    }
+
+    auto& package = appState.currentPackage();
+    configurePackageForCaptureType(package, wizard);
+    package.metadata.sampleRate = result.sampleRate;
+    const auto chunkId = alignedChunkIdForStep(*step);
+    setPcm16AudioChunk(package, chunkId, "cabinet-ir", result.impulseResponse, result.sampleRate);
+
+    CaptureQualityReport quality;
+    quality.overallSeverity = CaptureQualitySeverity::Good;
+    quality.peakDbfs = peakDb(result.impulseResponse);
+    quality.rmsDbfs = rmsDb(result.impulseResponse);
+    quality.alignmentConfidence = 1.0f;
+
+    CaptureStepResult stepResult;
+    stepResult.stepId = stepId;
+    stepResult.status = CaptureStepStatus::Passed;
+    stepResult.quality = quality;
+    stepResult.alignedChunkId = chunkId;
+    wizard.storeResult(stepResult);
+    wizard.markCabinetSlotImported(stepId, chunkId, file.getFileName());
+
+    if (wizard.hasCabinetRealSource())
+        if (auto* finalStep = wizard.findStep("final-validation"))
+            if (finalStep->status == CaptureStepStatus::NotStarted)
+                finalStep->status = CaptureStepStatus::Ready;
+
+    package.captureWorkflow = wizard.toMetadataVar();
+    appState.markCaptureDataDirty();
+    appState.appendLog("Imported cabinet IR for " + step->title + ": " + file.getFileName());
+    return true;
+}
+
+bool CaptureEngine::buildCabinetFromSlots()
+{
+    auto& wizard = appState.captureWizard();
+    if (! isCabinetWorkflow(wizard))
+        return false;
+
+    if (! wizard.hasCabinetRealSource())
+    {
+        appState.appendLog(juce::String::fromUTF8("캐비넷을 내보내려면 최소 1개 이상의 마이크 위치를 캡쳐하거나 IR로 가져와야 합니다."));
+        return false;
+    }
+
+    wizard.estimateEmptyCabinetSlots();
+    wizard.setStepStatus("final-validation", CaptureStepStatus::Passed);
+    wizard.currentStepId = "final-validation";
+
+    auto& package = appState.currentPackage();
+    configurePackageForCaptureType(package, wizard);
+    package.captureWorkflow = wizard.toMetadataVar();
+    appState.markCaptureDataDirty();
+    appState.appendLog("Cabinet package built from available mic position sources.");
+    return true;
 }
 
 void CaptureEngine::setCalibrationOutputDb(float dbFs)
@@ -450,9 +570,7 @@ void CaptureEngine::updateLiveCalibration()
     wizard.storeResult(result);
     wizard.calibrationPassed = true;
 
-    if (auto* next = wizard.findStep("gain-010"))
-        if (next->status == CaptureStepStatus::NotStarted)
-            next->status = CaptureStepStatus::Ready;
+    unlockPostCalibrationSteps(wizard);
 
     appState.currentPackage().captureWorkflow = wizard.toMetadataVar();
     stopCalibrationMonitor();
@@ -555,13 +673,11 @@ void CaptureEngine::refresh()
             if (step->stepId == "calibration" && result.status != CaptureStepStatus::Failed)
             {
                 wizard.calibrationPassed = true;
-                if (auto* next = wizard.findStep("gain-010"))
-                    if (next->status == CaptureStepStatus::NotStarted)
-                        next->status = CaptureStepStatus::Ready;
+                unlockPostCalibrationSteps(wizard);
             }
             else if (step->stepId == "gain-010" && result.status != CaptureStepStatus::Failed)
             {
-        if (auto* next = wizard.findStep("gain-050"))
+                if (auto* next = wizard.findStep("gain-050"))
                     if (next->status == CaptureStepStatus::NotStarted)
                         next->status = CaptureStepStatus::Ready;
             }
@@ -575,6 +691,21 @@ void CaptureEngine::refresh()
             {
                 if (auto* finalStep = wizard.findStep("final-validation"))
                     finalStep->status = CaptureStepStatus::Ready;
+            }
+            else if (isCabinetPositionStep(*step))
+            {
+                if (result.status != CaptureStepStatus::Failed)
+                {
+                    wizard.markCabinetSlotCaptured(step->stepId, alignedChunkId);
+                    if (wizard.hasCabinetRealSource())
+                        if (auto* finalStep = wizard.findStep("final-validation"))
+                            if (finalStep->status == CaptureStepStatus::NotStarted)
+                                finalStep->status = CaptureStepStatus::Ready;
+                }
+                else
+                {
+                    wizard.markCabinetSlotError(step->stepId, "Capture quality check failed.");
+                }
             }
 
             package.analysisSummary.estimatedLatencySamples = alignResult.estimatedOffsetSamples;
@@ -604,6 +735,8 @@ void CaptureEngine::refresh()
 
         if (capturedPeakDb() <= -90.0f)
             appState.appendLog("Captured signal is near silence. Check input channel selection and Babyface input meter.");
+
+        activeStepId.clear();
     }
 }
 
@@ -745,6 +878,7 @@ bool CaptureEngine::hasCompletedCapture() const noexcept
 
 bool CaptureEngine::loadPreviewModel(const CompactHansoModel& model)
 {
+    clearPreviewCabinetPackage();
     const auto loaded = audio.captureSource().loadPreviewModel(model);
     if (loaded)
     {
@@ -773,6 +907,52 @@ void CaptureEngine::clearPreviewModel()
     previewModelLoaded = false;
     ++previewRevision;
     appState.appendLog("Tone preview model cleared. Preview will play clean samples.");
+}
+
+bool CaptureEngine::loadPreviewCabinetPackage(const HansoPackage& package)
+{
+    clearPreviewModel();
+    juce::String error;
+    const auto loaded = audio.captureSource().loadPreviewCabinetPackage(package, error);
+    if (loaded)
+    {
+        previewCabinetLoaded = true;
+        ++previewCabinetRevisionCounter;
+        appState.appendLog("Tone preview cabinet loaded: " + audio.captureSource().previewCabinetSummary());
+    }
+    else
+    {
+        previewCabinetLoaded = false;
+        appState.appendLog("Tone preview cabinet could not be loaded: " + error);
+    }
+
+    return loaded;
+}
+
+void CaptureEngine::setPreviewMicPositionPercent(float percent)
+{
+    audio.captureSource().setPreviewMicPositionNormalized(juce::jlimit(0.0f, 100.0f, percent) / 100.0f);
+}
+
+void CaptureEngine::clearPreviewCabinetPackage()
+{
+    if (! previewCabinetLoaded && ! audio.captureSource().hasPreviewCabinetPackage())
+        return;
+
+    audio.captureSource().clearPreviewCabinetPackage();
+    previewCabinetLoaded = false;
+    ++previewCabinetRevisionCounter;
+    appState.appendLog("Tone preview cabinet cleared.");
+}
+
+bool CaptureEngine::hasPreviewCabinetPackage() const noexcept
+{
+    return previewCabinetLoaded && audio.captureSource().hasPreviewCabinetPackage();
+}
+
+int CaptureEngine::previewCabinetRevision() const noexcept
+{
+    return previewCabinetRevisionCounter;
 }
 
 const CompactHansoModel* CaptureEngine::currentPreviewModel() const noexcept
