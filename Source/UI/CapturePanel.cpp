@@ -1,6 +1,8 @@
 #include "UI/CapturePanel.h"
 
 #include "App/Utf8.h"
+#include "Capture/CabinetMessages.h"
+#include "Capture/CaptureStepUtils.h"
 #include "UI/AssetPanel.h"
 #include "UI/TonePreviewPanel.h"
 
@@ -46,6 +48,10 @@ juce::String qualityText(const CaptureStepResult* result)
     text = text + juce::String("Clips ") + juce::String(result->quality.clipSampleCount)
          + juce::String(" / Latency ") + juce::String(result->quality.latencyMs, 2)
          + juce::String(" ms");
+    if (result->quality.signalToNoiseDb > -120.0f)
+        text = text + juce::String("\nNoise floor ") + juce::String(result->quality.noiseFloorDbfs, 1)
+             + juce::String(" dBFS / SNR ") + juce::String(result->quality.signalToNoiseDb, 1)
+             + juce::String(" dB");
 
     for (const auto& issue : result->quality.issues)
     {
@@ -65,11 +71,6 @@ bool isComplete(CaptureStepStatus status) noexcept
 bool isGainCaptureStep(const CaptureStep& step) noexcept
 {
     return step.anchor.parameterKey == "gain";
-}
-
-bool isCabinetPositionStep(const CaptureStep& step) noexcept
-{
-    return step.anchor.parameterKey == "cabinet-position";
 }
 
 juce::String firstIncompleteGainStepId(const CaptureWizardState& wizard)
@@ -242,7 +243,7 @@ CapturePanel::CapturePanel(ApplicationState& state, CaptureEngine& captureEngine
     calibrationOutputMeterLabel.setJustificationType(juce::Justification::topLeft);
     calibrationInputMeterLabel.setJustificationType(juce::Justification::topLeft);
     calibrationMeterTitle.setColour(juce::Label::textColourId, juce::Colours::lightblue);
-    calibrationOutputSliderLabel.setText(utf8("앱 출력 (목표 -42 ~ -24 dBFS)"), juce::dontSendNotification);
+    calibrationOutputSliderLabel.setText(utf8("앱 출력 레벨 (캡쳐 공통 · 목표 -42 ~ -24 dBFS)"), juce::dontSendNotification);
     calibrationOutputSliderLabel.setJustificationType(juce::Justification::centredLeft);
     calibrationOutputSlider.setRange(-50.0, -18.0, 0.5);
     calibrationOutputSlider.setValue(capture.calibrationOutputDb(), juce::dontSendNotification);
@@ -457,7 +458,7 @@ void CapturePanel::resized()
         calibrationOutputMeterLabel.setBounds(centre.removeFromTop(38));
         calibrationOutputMeter.setBounds(centre.removeFromTop(20));
         centre.removeFromTop(8);
-        calibrationInputMeterLabel.setBounds(centre.removeFromTop(38));
+        calibrationInputMeterLabel.setBounds(centre.removeFromTop(showCalibrationControls ? 82 : 38));
         calibrationInputMeter.setBounds(centre.removeFromTop(20));
         centre.removeFromTop(12);
     }
@@ -789,7 +790,7 @@ void CapturePanel::handleStepButtonClicked(const juce::String& stepId)
             }
             else if (! wizard.hasCabinetRealSource())
             {
-                appState.appendLog(utf8("캐비넷을 내보내려면 최소 1개 이상의 마이크 위치를 캡쳐하거나 IR로 가져와야 합니다."));
+                appState.appendLog(cabinetExportRequiresRealSourceMessage());
             }
             else if (capture.buildCabinetFromSlots())
             {
@@ -853,14 +854,18 @@ void CapturePanel::updateCalibrationMeter()
                                         + outputState,
                                         juce::dontSendNotification);
 
-    calibrationInputMeterLabel.setText(utf8("Return: ")
-                                       + juce::String(inputDb, 1)
-                                       + " dBFS\nTarget -36 to -8 / "
-                                       + inputState
-                                       + (capture.isCalibrationLevelSafe() && capture.isCalibrationOutputLevelSafe()
-                                            ? utf8(" / 3초")
-                                            : juce::String()),
-                                       juce::dontSendNotification);
+    auto returnText = utf8("Return: ")
+                    + juce::String(inputDb, 1)
+                    + " dBFS\nTarget -36 to -8 / "
+                    + inputState
+                    + (capture.isCalibrationLevelSafe() && capture.isCalibrationOutputLevelSafe()
+                         ? utf8(" / 3초")
+                         : juce::String());
+
+    if (capture.calibrationStatusText().isNotEmpty())
+        returnText += "\n" + capture.calibrationStatusText();
+
+    calibrationInputMeterLabel.setText(returnText, juce::dontSendNotification);
 }
 
 void CapturePanel::runFinishCaptureAnalysis()

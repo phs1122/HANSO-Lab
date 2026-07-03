@@ -32,7 +32,6 @@ private:
         juce::AudioBuffer<float> impulseResponse;
     };
 
-    static float normalizedPositionForId(const juce::String& id) noexcept;
     static CabinetSlotSource sourceFromString(const juce::String& text) noexcept;
     static bool loadPositionIr(const HansoPackage& package,
                                const juce::String& chunkId,

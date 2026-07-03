@@ -117,6 +117,7 @@ TonePreviewPanel::TonePreviewPanel(ApplicationState& state, CaptureEngine& captu
     };
 
     applyPreviewControlLabels();
+    loadInitialPreviewModel();
     refreshSamples();
     updateButtonState();
     startTimerHz(12);

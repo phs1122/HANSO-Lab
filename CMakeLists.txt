@@ -61,6 +61,8 @@ set(HANSO_LAB_APP_SOURCES
     Source/Capture/SignalAlignment.cpp
     Source/Capture/TestSignalGenerator.cpp
     Source/Analysis/AnalysisEngine.cpp
+    Source/Analysis/CabinetToneProfiler.cpp
+    Source/Analysis/CalibrationValidator.cpp
     Source/Analysis/CaptureQualityAnalyzer.cpp
     Source/Analysis/DynamicResponseAnalyzer.cpp
     Source/Analysis/FrequencyResponseAnalyzer.cpp
@@ -110,4 +112,48 @@ target_link_libraries(HANSO_Lab
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags)
+
+# Offline analysis regression tests. Build and run with:
+#   cmake --build build --target HANSO_Lab_Tests
+#   "./build/HANSO_Lab_Tests_artefacts/Debug/HANSO Lab Tests"
+juce_add_console_app(HANSO_Lab_Tests
+    PRODUCT_NAME "HANSO Lab Tests")
+
+target_sources(HANSO_Lab_Tests PRIVATE
+    Source/Tests/TestsMain.cpp
+    Source/Analysis/CabinetToneProfiler.cpp
+    Source/Analysis/CalibrationValidator.cpp
+    Source/Analysis/CaptureQualityAnalyzer.cpp
+    Source/Analysis/ModelExtractionEngine.cpp
+    Source/Capture/CaptureRecipe.cpp
+    Source/Capture/CaptureWizardState.cpp
+    Source/Capture/SignalAlignment.cpp
+    Source/Capture/TestSignalGenerator.cpp
+    Source/Model/HansoPackage.cpp
+    Source/Serialization/HansoAudioChunkCodec.cpp
+    Source/Serialization/HansoModelCodec.cpp)
+
+target_include_directories(HANSO_Lab_Tests
+    PRIVATE
+        Source)
+
+target_compile_definitions(HANSO_Lab_Tests
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0)
+
+target_link_libraries(HANSO_Lab_Tests
+    PRIVATE
+        juce::juce_audio_devices
+        juce::juce_audio_formats
+        juce::juce_audio_utils
+        juce::juce_core
+        juce::juce_data_structures
+        juce::juce_dsp
+        juce::juce_events
+        juce::juce_graphics
+        juce::juce_gui_basics
+    PUBLIC
+        juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)

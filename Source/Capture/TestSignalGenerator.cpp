@@ -34,6 +34,11 @@ juce::String TestSignalGenerator::toString(TestSignalType type)
     return "Unknown";
 }
 
+std::array<double, 10> TestSignalGenerator::multiSineFrequencies() noexcept
+{
+    return { 82.41, 110.0, 146.83, 196.0, 246.94, 329.63, 440.0, 880.0, 1760.0, 3520.0 };
+}
+
 void TestSignalGenerator::generateLogSineSweep(juce::AudioBuffer<float>& buffer, const TestSignalSpec& spec)
 {
     constexpr auto startHz = 30.0;
@@ -48,6 +53,16 @@ void TestSignalGenerator::generateLogSineSweep(juce::AudioBuffer<float>& buffer,
         const auto instantHz = startHz * std::exp(logRatio * t / duration);
         phase += juce::MathConstants<double>::twoPi * instantHz / spec.sampleRate;
         buffer.setSample(0, i, spec.amplitude * std::sin(static_cast<float>(phase)));
+    }
+
+    // Short raised-cosine fades keep the sweep from starting and ending with a
+    // click, which would otherwise leak wideband energy into the analysis.
+    const auto fadeSamples = juce::jmin(buffer.getNumSamples() / 4,
+                                        static_cast<int>(0.01 * spec.sampleRate));
+    if (fadeSamples > 1)
+    {
+        buffer.applyGainRamp(0, 0, fadeSamples, 0.0f, 1.0f);
+        buffer.applyGainRamp(0, buffer.getNumSamples() - fadeSamples, fadeSamples, 1.0f, 0.0f);
     }
 }
 
@@ -93,8 +108,8 @@ void TestSignalGenerator::generateImpulseBurst(juce::AudioBuffer<float>& buffer,
 
 void TestSignalGenerator::generateMultiSine(juce::AudioBuffer<float>& buffer, const TestSignalSpec& spec)
 {
-    constexpr double frequencies[] = { 82.41, 110.0, 146.83, 196.0, 246.94, 329.63, 440.0, 880.0, 1760.0, 3520.0 };
-    constexpr auto numFrequencies = static_cast<int>(sizeof(frequencies) / sizeof(frequencies[0]));
+    const auto frequencies = multiSineFrequencies();
+    constexpr auto numFrequencies = 10;
     double phases[numFrequencies] {};
 
     for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
@@ -103,7 +118,7 @@ void TestSignalGenerator::generateMultiSine(juce::AudioBuffer<float>& buffer, co
         for (int i = 0; i < numFrequencies; ++i)
         {
             value += std::sin(phases[i]);
-            phases[i] += juce::MathConstants<double>::twoPi * frequencies[i] / spec.sampleRate;
+            phases[i] += juce::MathConstants<double>::twoPi * frequencies[static_cast<size_t>(i)] / spec.sampleRate;
         }
 
         buffer.setSample(0, sample, static_cast<float>(value / numFrequencies) * spec.amplitude);

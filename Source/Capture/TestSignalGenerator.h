@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 #include <JuceHeader.h>
 
 namespace hanso
@@ -26,6 +28,7 @@ class TestSignalGenerator final
 public:
     juce::AudioBuffer<float> generate(const TestSignalSpec& spec) const;
     static juce::String toString(TestSignalType type);
+    static std::array<double, 10> multiSineFrequencies() noexcept;
 
 private:
     static void generateLogSineSweep(juce::AudioBuffer<float>& buffer, const TestSignalSpec& spec);

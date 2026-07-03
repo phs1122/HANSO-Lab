@@ -28,6 +28,7 @@ struct CaptureQualityReport
     float rmsDbfs { -120.0f };
     int clipSampleCount { 0 };
     float noiseFloorDbfs { -120.0f };
+    float signalToNoiseDb { -120.0f };
     int latencySamples { 0 };
     double latencyMs { 0.0 };
     float alignmentConfidence { 0.0f };

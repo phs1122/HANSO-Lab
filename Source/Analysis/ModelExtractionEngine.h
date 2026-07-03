@@ -17,6 +17,7 @@ struct ModelExtractionResult
 class ModelExtractionEngine final
 {
 public:
+    juce::var buildDspCoreFromAnalysis(const HansoPackage& package) const;
     ModelExtractionResult extractIntoPackage(HansoPackage& package) const;
 };
 }

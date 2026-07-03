@@ -4,7 +4,8 @@ namespace hanso
 {
 namespace
 {
-constexpr char hansoMagic[] = { 'H', 'A', 'N', 'S', 'O', '2' };
+constexpr char hansoMagic[] = { 'H', 'A', 'N', 'S', 'O' };
+constexpr char legacyHanso2Suffix = '2';
 
 bool writeStringBlock(juce::OutputStream& stream, const juce::String& text)
 {
@@ -79,12 +80,16 @@ bool HansoSerializer::readFromFile(const juce::File& source, HansoPackage& packa
     }
 
     char magic[sizeof(hansoMagic)] {};
-    stream->read(magic, sizeof(magic));
-    if (std::memcmp(magic, hansoMagic, sizeof(hansoMagic)) != 0)
+    if (stream->read(magic, sizeof(magic)) != static_cast<int>(sizeof(magic))
+        || std::memcmp(magic, hansoMagic, sizeof(hansoMagic)) != 0)
     {
-        error = "Unsupported .hanso container. Expected HANSO2.";
+        error = "Unsupported .hanso container. Expected HANSO.";
         return false;
     }
+
+    const auto versionStart = stream->getPosition();
+    if (stream->readByte() != legacyHanso2Suffix)
+        stream->setPosition(versionStart);
 
     package = {};
     package.formatVersion = stream->readInt();
@@ -118,6 +123,7 @@ bool HansoSerializer::readFromFile(const juce::File& source, HansoPackage& packa
 
         package.captureWorkflow = object->getProperty("captureWorkflow");
         package.cabinetProfile = object->getProperty("cabProfile");
+        package.dspCore = object->getProperty("dspCore");
     }
 
     const auto chunkCount = stream->readInt();

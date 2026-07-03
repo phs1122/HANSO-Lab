@@ -335,13 +335,3 @@ Every final response must include:
 - Regression risk: low/medium/high
 
 If the answer is not clearly "yes, preserved", explain why.
-
-## 다음 주요 과제
-
-우선순위 후보:
-- Cabinet direct capture deconvolution IR 생성
-- Cabinet `.hanso` Tone Preview 로딩
-- Cabinet mic position blend/interpolation DSP
-- Compact model extraction 고도화
-- Realtime preview quality 개선
-- UI layout polish

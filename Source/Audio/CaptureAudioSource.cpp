@@ -12,6 +12,11 @@ void CaptureAudioSource::prepare(double sampleRate, int maximumBlockSize, int ou
                                  false,
                                  false,
                                  true);
+
+    recentInputCapacity = juce::jmax(juce::jmax(1, maximumBlockSize),
+                                     static_cast<int>(std::ceil(sampleRate * 1.25)));
+    recentInputRing.reset(new std::atomic<float>[static_cast<size_t>(recentInputCapacity)]);
+    clearRecentInputHistory();
 }
 
 void CaptureAudioSource::release()
@@ -19,6 +24,10 @@ void CaptureAudioSource::release()
     stopCapture();
     stopCalibrationSignal();
     stopPreviewSample();
+    recentInputRing.reset();
+    recentInputCapacity = 0;
+    recentInputWritePosition.store(0);
+    recentInputValidSamples.store(0);
 }
 
 void CaptureAudioSource::setMonitoringEnabled(bool shouldMonitor) noexcept
@@ -321,6 +330,46 @@ float CaptureAudioSource::outputLevel() const noexcept
     return latestOutputLevel.load();
 }
 
+juce::AudioBuffer<float> CaptureAudioSource::copyRecentInputSignal(int maxSamples) const
+{
+    juce::AudioBuffer<float> copy;
+    if (recentInputRing == nullptr || recentInputCapacity <= 0 || maxSamples <= 0)
+        return copy;
+
+    const auto available = juce::jlimit(0, recentInputCapacity, recentInputValidSamples.load(std::memory_order_acquire));
+    const auto samplesToCopy = juce::jmin(maxSamples, available);
+    if (samplesToCopy <= 0)
+        return copy;
+
+    copy.setSize(1, samplesToCopy, false, true, true);
+    const auto writePosition = recentInputWritePosition.load(std::memory_order_acquire);
+    auto readPosition = writePosition - samplesToCopy;
+    while (readPosition < 0)
+        readPosition += recentInputCapacity;
+
+    auto* destination = copy.getWritePointer(0);
+    for (int sample = 0; sample < samplesToCopy; ++sample)
+    {
+        destination[sample] = recentInputRing[static_cast<size_t>(readPosition)].load(std::memory_order_relaxed);
+        if (++readPosition >= recentInputCapacity)
+            readPosition = 0;
+    }
+
+    return copy;
+}
+
+void CaptureAudioSource::clearRecentInputHistory() noexcept
+{
+    if (recentInputRing == nullptr || recentInputCapacity <= 0)
+        return;
+
+    for (int sample = 0; sample < recentInputCapacity; ++sample)
+        recentInputRing[static_cast<size_t>(sample)].store(0.0f, std::memory_order_relaxed);
+
+    recentInputWritePosition.store(0, std::memory_order_release);
+    recentInputValidSamples.store(0, std::memory_order_release);
+}
+
 void CaptureAudioSource::process(const float* const* inputChannelData,
                                  int numInputChannels,
                                  juce::AudioBuffer<float>& outputBuffer) noexcept
@@ -396,6 +445,8 @@ void CaptureAudioSource::process(const float* const* inputChannelData,
     const auto* selectedInput = inputLayout.numDeviceChannels() > 0
                               ? inputLayout.channelDataForDeviceChannel(inputChannelData, numInputChannels, selectedChannel)
                               : inputLayout.channelDataAtCallbackIndex(inputChannelData, numInputChannels, selectedChannel);
+
+    writeRecentInputBlock(selectedInput, outputBuffer.getNumSamples());
 
     if (inputChannelData != nullptr && selectedChannel < selectableChannels)
     {
@@ -597,6 +648,26 @@ void CaptureAudioSource::process(const float* const* inputChannelData,
 
     latestInputLevel.store(inputPeak);
     latestOutputLevel.store(outputPeak);
+}
+
+void CaptureAudioSource::writeRecentInputBlock(const float* input, int numSamples) noexcept
+{
+    if (recentInputRing == nullptr || recentInputCapacity <= 0 || numSamples <= 0)
+        return;
+
+    auto writePosition = recentInputWritePosition.load(std::memory_order_relaxed);
+    for (int sample = 0; sample < numSamples; ++sample)
+    {
+        recentInputRing[static_cast<size_t>(writePosition)].store(input != nullptr ? input[sample] : 0.0f,
+                                                                  std::memory_order_relaxed);
+        if (++writePosition >= recentInputCapacity)
+            writePosition = 0;
+    }
+
+    recentInputWritePosition.store(writePosition, std::memory_order_release);
+    const auto previousValid = recentInputValidSamples.load(std::memory_order_relaxed);
+    recentInputValidSamples.store(juce::jmin(recentInputCapacity, previousValid + numSamples),
+                                  std::memory_order_release);
 }
 
 void CaptureAudioSource::applyPreviewMonitoring(juce::AudioBuffer<float>& outputBuffer, int numSamples) noexcept

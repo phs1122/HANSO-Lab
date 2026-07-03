@@ -18,6 +18,9 @@ struct CaptureStepResult
     juce::String dryChunkId;
     juce::String capturedChunkId;
     juce::String alignedChunkId;
+    float dryPeakDbfs { -120.0f };
+    float dryRmsDbfs { -120.0f };
+    float captureOutputDbfs { -120.0f };
 };
 
 class CaptureWizardState final
@@ -33,6 +36,7 @@ public:
     juce::String currentStepId;
     bool calibrationPassed { false };
     bool warningExportAccepted { false };
+    bool cabinetInterpolationComputed { false };
     std::vector<CabinetMicPositionSlot> cabinetSlots;
 
     void setCaptureType(CaptureType type);

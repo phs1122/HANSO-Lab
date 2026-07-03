@@ -40,6 +40,9 @@ public:
     bool isCalibrationMonitorRunning() const noexcept;
     bool isCalibrationLevelSafe() const noexcept;
     bool isCalibrationOutputLevelSafe() const noexcept;
+    juce::String calibrationStatusText() const;
+    float calibrationNoiseFloorDbfs() const noexcept;
+    float calibrationSignalToNoiseDb() const noexcept;
     void stop();
     void reset();
     void refresh();
@@ -87,6 +90,14 @@ public:
     juce::String previewModelSummary() const;
 
 private:
+    enum class CalibrationMonitorPhase
+    {
+        Idle,
+        MeasuringNoise,
+        Probing,
+        Blocked
+    };
+
     ApplicationState& appState;
     AudioEngine& audio;
     CaptureSession session;
@@ -97,6 +108,15 @@ private:
     juce::String activeStepId;
     float userCalibrationOutputDb { -33.0f };
     int calibrationSafeTicks { 0 };
+    CalibrationMonitorPhase calibrationPhase { CalibrationMonitorPhase::Idle };
+    double calibrationPhaseStartMs { 0.0 };
+    double calibrationNoisePowerSum { 0.0 };
+    int calibrationNoiseMeasurements { 0 };
+    float calibrationNoiseFloorDbfsValue { -120.0f };
+    float calibrationSignalToNoiseDbValue { -120.0f };
+    float calibrationToneDominanceDb { -120.0f };
+    juce::String calibrationLiveStatusText;
+    juce::String calibrationLastLogCode;
     CompactHansoModel previewModel;
     bool previewModelLoaded { false };
     int previewRevision { 0 };

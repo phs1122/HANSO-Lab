@@ -40,8 +40,11 @@ AnalysisSummary AnalysisEngine::analyzeSession(const CaptureSession& session)
     summary.highBandDb = frequency.highBandDb;
     summary.estimatedGainDb = transfer.estimatedGainDb;
     summary.dynamicRangeDb = dynamics.dynamicRangeDb;
-    summary.envelopeAttackMs = dynamics.envelopeAttackMs;
-    summary.envelopeReleaseMs = dynamics.envelopeReleaseMs;
+
+    // Attack/release derived from a constant-envelope sweep measures where the
+    // response happens to peak, not the device's dynamics — do not report it.
+    summary.envelopeAttackMs = 0.0f;
+    summary.envelopeReleaseMs = 0.0f;
 
     auto& package = appState.currentPackage();
     package.analysisSummary = summary;
@@ -51,7 +54,8 @@ AnalysisSummary AnalysisEngine::analyzeSession(const CaptureSession& session)
     package.circuitProfile.exposedParameters.add("Tone");
     package.circuitProfile.exposedParameters.add("Level");
     package.dynamicProfile.dynamicRangeDb = summary.dynamicRangeDb;
-    package.dynamicProfile.transientScore = summary.envelopeAttackMs > 0.0f ? 1000.0f / summary.envelopeAttackMs : 0.0f;
+    package.dynamicProfile.transientScore = 0.0f;
+    package.dynamicProfile.transientMeasured = false;
 
     const auto residualDataset = residualDatasetBuilder.build(dry,
                                                               captured,

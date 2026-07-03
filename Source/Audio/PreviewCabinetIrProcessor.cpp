@@ -1,5 +1,7 @@
 #include "Audio/PreviewCabinetIrProcessor.h"
 
+#include "Capture/CabinetCaptureState.h"
+#include "Capture/CabinetMicPositions.h"
 #include "Serialization/HansoAudioChunkCodec.h"
 
 namespace hanso
@@ -9,28 +11,9 @@ namespace
 constexpr float positionEpsilon = 0.0005f;
 }
 
-float PreviewCabinetIrProcessor::normalizedPositionForId(const juce::String& id) noexcept
-{
-    if (id == "cab-center")
-        return 0.0f;
-    if (id == "cab-edge")
-        return 0.33f;
-    if (id == "cab-cone")
-        return 0.66f;
-    if (id == "cab-off-axis")
-        return 1.0f;
-    return 0.5f;
-}
-
 CabinetSlotSource PreviewCabinetIrProcessor::sourceFromString(const juce::String& text) noexcept
 {
-    if (text == "captured-ir")
-        return CabinetSlotSource::CapturedIr;
-    if (text == "imported-ir")
-        return CabinetSlotSource::ImportedIr;
-    if (text == "estimated-compact-cab")
-        return CabinetSlotSource::EstimatedCompactCab;
-    return CabinetSlotSource::Empty;
+    return cabinetSlotSourceFromString(text);
 }
 
 bool PreviewCabinetIrProcessor::loadPositionIr(const HansoPackage& package,
@@ -132,7 +115,7 @@ bool PreviewCabinetIrProcessor::loadFromPackage(const HansoPackage& package, juc
         PositionIr positionIr;
         positionIr.id = positionObject->getProperty("id").toString();
         positionIr.label = positionObject->getProperty("label").toString();
-        positionIr.normalizedPosition = normalizedPositionForId(positionIr.id);
+        positionIr.normalizedPosition = normalizedPositionForCabinetId(positionIr.id);
         positionIr.source = source;
 
         const auto chunkId = positionObject->getProperty("impulseResponseChunkId").toString();

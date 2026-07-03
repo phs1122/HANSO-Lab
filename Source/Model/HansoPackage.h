@@ -36,6 +36,7 @@ public:
     ResidualModelInfo residualModel;
     juce::var captureWorkflow;
     juce::var cabinetProfile;
+    juce::var dspCore;
     juce::OwnedArray<HansoBinaryChunk> chunks;
 
     juce::var createMetadataVar() const;

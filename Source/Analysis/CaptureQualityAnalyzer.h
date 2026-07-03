@@ -11,6 +11,8 @@ struct CaptureQualityTarget
     float minimumRmsDbfs { -36.0f };
     float maximumRmsDbfs { -8.0f };
     juce::String label { "Default" };
+    float minimumSnrDb { 30.0f };
+    bool lowGainAnchor { false };
 };
 
 class CaptureQualityAnalyzer final

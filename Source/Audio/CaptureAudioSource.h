@@ -65,6 +65,8 @@ public:
     juce::String previewModelSummary() const;
     float inputLevel() const noexcept;
     float outputLevel() const noexcept;
+    juce::AudioBuffer<float> copyRecentInputSignal(int maxSamples) const;
+    void clearRecentInputHistory() noexcept;
     void process(const float* const* inputChannelData,
                  int numInputChannels,
                  juce::AudioBuffer<float>& outputBuffer) noexcept;
@@ -93,7 +95,12 @@ private:
     std::atomic<int> previewSamplePlayhead { 0 };
     std::atomic<float> latestInputLevel { 0.0f };
     std::atomic<float> latestOutputLevel { 0.0f };
+    std::unique_ptr<std::atomic<float>[]> recentInputRing;
+    int recentInputCapacity { 0 };
+    std::atomic<int> recentInputWritePosition { 0 };
+    std::atomic<int> recentInputValidSamples { 0 };
 
+    void writeRecentInputBlock(const float* input, int numSamples) noexcept;
     void applyPreviewMonitoring(juce::AudioBuffer<float>& outputBuffer, int numSamples) noexcept;
 
     std::atomic<bool> previewLoopEnabled { false };
