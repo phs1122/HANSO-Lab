@@ -1038,7 +1038,15 @@ void CapturePanel::runFinishCaptureAnalysis()
         const auto summary = labWorkflow.runBasicAnalysis();
         const auto extraction = labWorkflow.extractCompactModel();
         if (extraction.success)
-            capture.loadPreviewModel(extraction.model);
+        {
+            // Insert the fresh capture into its preview rig slot: pedals go in
+            // front of the amp, everything else fills the amp slot.
+            const auto type = appState.captureWizard().captureType;
+            if (type == CaptureType::Pedal || type == CaptureType::Effect)
+                capture.loadPreviewPedalModel(extraction.model);
+            else
+                capture.loadPreviewModel(extraction.model);
+        }
 
         analysisSummaryLabel.setText("Analysis: " + LabWorkflow::formatSummary(summary)
                                      + (extraction.success ? " / Model ready" : " / Model extraction skipped"),

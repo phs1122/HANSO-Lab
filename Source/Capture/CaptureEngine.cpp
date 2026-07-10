@@ -648,6 +648,11 @@ bool CaptureEngine::buildCabinetFromSlots()
     appState.markCaptureDataDirty();
     appState.appendLog("Cabinet package built from available mic position sources. Tone profiles computed for "
                        + juce::String(profiledCount) + " real source slot(s).");
+
+    // Insert the freshly built cabinet into the preview rig's cabinet slot so
+    // it is audible right after Finish / Build Cabinet.
+    package.cabinetProfile = wizard.toCabinetProfileVar(package.metadata.name, {}, {}, {});
+    loadPreviewCabinetPackage(package);
     return true;
 }
 
@@ -1379,7 +1384,6 @@ bool CaptureEngine::hasCompletedCapture() const noexcept
 
 bool CaptureEngine::loadPreviewModel(const CompactHansoModel& model)
 {
-    clearPreviewCabinetPackage();
     const auto loaded = audio.captureSource().loadPreviewModel(model);
     if (loaded)
     {
@@ -1401,6 +1405,43 @@ void CaptureEngine::setPreviewGainPercent(float percent)
     audio.captureSource().setPreviewGainPercent(percent);
 }
 
+bool CaptureEngine::loadPreviewPedalModel(const CompactHansoModel& model)
+{
+    const auto loaded = audio.captureSource().loadPreviewPedalModel(model);
+    if (loaded)
+    {
+        ++previewRevision;
+        appState.appendLog("Tone preview pedal loaded: "
+                           + audio.captureSource().previewPedalSummary());
+    }
+    else
+    {
+        appState.appendLog("Tone preview pedal could not be loaded.");
+    }
+
+    return loaded;
+}
+
+void CaptureEngine::clearPreviewPedalModel()
+{
+    if (! audio.captureSource().hasPreviewPedalModel())
+        return;
+
+    audio.captureSource().clearPreviewPedalModel();
+    ++previewRevision;
+    appState.appendLog("Tone preview pedal cleared.");
+}
+
+bool CaptureEngine::hasPreviewPedalModel() const noexcept
+{
+    return audio.captureSource().hasPreviewPedalModel();
+}
+
+juce::String CaptureEngine::previewPedalSummary() const
+{
+    return audio.captureSource().previewPedalSummary();
+}
+
 void CaptureEngine::clearPreviewModel()
 {
     audio.captureSource().clearPreviewModel();
@@ -1412,7 +1453,6 @@ void CaptureEngine::clearPreviewModel()
 
 bool CaptureEngine::loadPreviewCabinetPackage(const HansoPackage& package)
 {
-    clearPreviewModel();
     juce::String error;
     const auto loaded = audio.captureSource().loadPreviewCabinetPackage(package, error);
     if (loaded)
@@ -1491,6 +1531,11 @@ juce::String CaptureEngine::previewComplementCabSummary() const
 bool CaptureEngine::previewCabinetHasMicMatrix() const noexcept
 {
     return audio.captureSource().previewCabinetHasMicMatrix();
+}
+
+juce::String CaptureEngine::previewCabinetSummary() const
+{
+    return audio.captureSource().previewCabinetSummary();
 }
 
 void CaptureEngine::clearPreviewCabinetPackage()

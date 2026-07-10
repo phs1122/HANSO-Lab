@@ -5,6 +5,7 @@ namespace hanso
 void CaptureAudioSource::prepare(double sampleRate, int maximumBlockSize, int outputChannels)
 {
     previewProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
+    pedalProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
     cabinetProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
     cabinetIrProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
     complementCabIrProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
@@ -184,7 +185,8 @@ juce::AudioBuffer<float> CaptureAudioSource::copyCapturedSignal() const
 
 bool CaptureAudioSource::loadPreviewModel(const CompactHansoModel& model)
 {
-    clearPreviewCabinetPackage();
+    // Amp and cabinet slots coexist in the preview rig; loading one no longer
+    // clears the other.
     return previewProcessor.loadModel(model);
 }
 
@@ -200,9 +202,36 @@ void CaptureAudioSource::clearPreviewModel() noexcept
     cabinetProcessor.reset();
 }
 
+bool CaptureAudioSource::loadPreviewPedalModel(const CompactHansoModel& model)
+{
+    const auto loaded = pedalProcessor.loadModel(model);
+    if (loaded)
+        pedalProcessor.setPreviewGainPercent(50.0f);
+    return loaded;
+}
+
+void CaptureAudioSource::setPreviewPedalGainPercent(float percent) noexcept
+{
+    pedalProcessor.setPreviewGainPercent(percent);
+}
+
+void CaptureAudioSource::clearPreviewPedalModel() noexcept
+{
+    pedalProcessor.clear();
+}
+
+bool CaptureAudioSource::hasPreviewPedalModel() const noexcept
+{
+    return pedalProcessor.hasModel();
+}
+
+juce::String CaptureAudioSource::previewPedalSummary() const
+{
+    return pedalProcessor.summary();
+}
+
 bool CaptureAudioSource::loadPreviewCabinetPackage(const HansoPackage& package, juce::String& error)
 {
-    clearPreviewModel();
     if (! cabinetIrProcessor.loadFromPackage(package, error))
         return false;
 
@@ -291,6 +320,7 @@ bool CaptureAudioSource::startPreviewSample() noexcept
     stopCalibrationSignal();
     setMonitoringEnabled(false);
     previewProcessor.reset();
+    pedalProcessor.reset();
     cabinetProcessor.reset();
     cabinetIrProcessor.reset();
     complementCabIrProcessor.reset();
@@ -305,6 +335,7 @@ void CaptureAudioSource::stopPreviewSample() noexcept
     previewSampleRunning.store(false);
     previewSamplePlayhead.store(0);
     previewProcessor.reset();
+    pedalProcessor.reset();
     cabinetProcessor.reset();
     cabinetIrProcessor.reset();
     complementCabIrProcessor.reset();
@@ -676,41 +707,37 @@ void CaptureAudioSource::process(const float* const* inputChannelData,
             }
         }
 
+        // Preview rig chain: Pedal slot -> Amp slot -> Cabinet slot. Empty
+        // slots are unity (clean standard equipment), so every capture type
+        // renders in the same fixed chain. Stages hand off through the
+        // scratch buffer, whose sample-input contents are consumed first.
         const auto inputChannelsForPreview = juce::jmin(previewScratchBuffer.getNumChannels(), 2);
-        const auto* const* previewInputs = previewScratchBuffer.getArrayOfReadPointers();
+        const auto copyOutputToScratch = [this, &outputBuffer, samplesWritten]
+        {
+            const auto channels = juce::jmin(previewScratchBuffer.getNumChannels(),
+                                             outputBuffer.getNumChannels());
+            for (int channel = 0; channel < channels; ++channel)
+                previewScratchBuffer.copyFrom(channel, 0, outputBuffer, channel, 0, samplesWritten);
+            return channels;
+        };
 
-        if (cabinetIrProcessor.hasModel())
+        if (pedalProcessor.hasModel())
         {
-            cabinetIrProcessor.process(previewInputs, inputChannelsForPreview, outputBuffer, samplesWritten);
-            micColorProcessor.process(outputBuffer, samplesWritten);
+            pedalProcessor.process(previewScratchBuffer.getArrayOfReadPointers(),
+                                   inputChannelsForPreview,
+                                   outputBuffer);
+            copyOutputToScratch();
         }
-        else if (previewProcessor.hasModel())
+
+        if (previewProcessor.hasModel())
         {
-            previewProcessor.process(previewInputs, inputChannelsForPreview, outputBuffer);
-            if (previewCabinetEnabled.load())
-            {
-                if (complementCabUseCustom.load() && complementCabIrProcessor.hasModel())
-                {
-                    // The convolution copies input to output, so route through
-                    // the scratch buffer (its sample-input contents are no
-                    // longer needed at this point in the block).
-                    const auto channels = juce::jmin(previewScratchBuffer.getNumChannels(),
-                                                     outputBuffer.getNumChannels());
-                    for (int channel = 0; channel < channels; ++channel)
-                        previewScratchBuffer.copyFrom(channel, 0, outputBuffer, channel, 0, samplesWritten);
-                    complementCabIrProcessor.process(previewScratchBuffer.getArrayOfReadPointers(),
-                                                     channels,
-                                                     outputBuffer,
-                                                     samplesWritten);
-                }
-                else
-                {
-                    cabinetProcessor.process(outputBuffer, samplesWritten);
-                }
-            }
+            previewProcessor.process(previewScratchBuffer.getArrayOfReadPointers(),
+                                     inputChannelsForPreview,
+                                     outputBuffer);
         }
         else
         {
+            // Clean standard amp: unity passthrough.
             const auto channelsToWrite = juce::jmin(outputBuffer.getNumChannels(), inputChannelsForPreview);
             for (int channel = 0; channel < channelsToWrite; ++channel)
                 outputBuffer.copyFrom(channel, 0, previewScratchBuffer, channel, 0, samplesWritten);
@@ -718,6 +745,32 @@ void CaptureAudioSource::process(const float* const* inputChannelData,
             if (channelsToWrite == 1 && outputBuffer.getNumChannels() > 1)
                 for (int channel = 1; channel < outputBuffer.getNumChannels(); ++channel)
                     outputBuffer.copyFrom(channel, 0, previewScratchBuffer, 0, 0, samplesWritten);
+        }
+
+        if (cabinetIrProcessor.hasModel())
+        {
+            // Cabinet slot holds a captured/imported cabinet package.
+            const auto channels = copyOutputToScratch();
+            cabinetIrProcessor.process(previewScratchBuffer.getArrayOfReadPointers(),
+                                       channels,
+                                       outputBuffer,
+                                       samplesWritten);
+            micColorProcessor.process(outputBuffer, samplesWritten);
+        }
+        else if (previewCabinetEnabled.load())
+        {
+            if (complementCabUseCustom.load() && complementCabIrProcessor.hasModel())
+            {
+                const auto channels = copyOutputToScratch();
+                complementCabIrProcessor.process(previewScratchBuffer.getArrayOfReadPointers(),
+                                                 channels,
+                                                 outputBuffer,
+                                                 samplesWritten);
+            }
+            else
+            {
+                cabinetProcessor.process(outputBuffer, samplesWritten);
+            }
         }
 
         applyPreviewMonitoring(outputBuffer, samplesWritten);

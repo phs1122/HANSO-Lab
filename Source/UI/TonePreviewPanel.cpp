@@ -59,6 +59,19 @@ TonePreviewPanel::TonePreviewPanel(ApplicationState& state, CaptureEngine& captu
     gainSlider.onValueChange = [this] { updateGainModel(); };
     addAndMakeVisible(gainSlider);
 
+    micPositionSlider.setRange(0.0, 100.0, 1.0);
+    micPositionSlider.setValue(33.0, juce::dontSendNotification);
+    micPositionSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 74, 24);
+    micPositionSlider.setTextValueSuffix("% Mic");
+    micPositionSlider.onValueChange = [this]
+    {
+        capture.setPreviewMicPositionPercent(static_cast<float>(micPositionSlider.getValue()));
+    };
+    addAndMakeVisible(micPositionSlider);
+
+    chainStrip.onBlockClicked = [this](const juce::String& blockId) { handleChainBlockClicked(blockId); };
+    chainStrip.onBlockReset = [this](const juce::String& blockId) { handleChainBlockReset(blockId); };
+
     sampleList.setColour(juce::ListBox::backgroundColourId, juce::Colour::fromRGB(26, 28, 30));
     sampleList.setRowHeight(30);
     addAndMakeVisible(sampleList);
@@ -181,13 +194,17 @@ void TonePreviewPanel::resized()
     chainStrip.setBounds(area.removeFromTop(78).reduced(0, 6));
     area.removeFromTop(6);
 
-    auto gainRow = area.removeFromTop(36);
+    auto gainRow = area.removeFromTop(34);
     gainRow.removeFromLeft(90);
-    gainSlider.setBounds(gainRow.removeFromLeft(420).reduced(0, 4));
+    gainSlider.setBounds(gainRow.removeFromLeft(420).reduced(0, 3));
     gainRow.removeFromLeft(12);
-    const auto modeBoxArea = gainRow.removeFromLeft(160).reduced(0, 5);
-    previewMicBox.setBounds(modeBoxArea);
-    cabSourceBox.setBounds(modeBoxArea);
+    cabSourceBox.setBounds(gainRow.removeFromLeft(160).reduced(0, 4));
+
+    auto micRow = area.removeFromTop(34);
+    micRow.removeFromLeft(90);
+    micPositionSlider.setBounds(micRow.removeFromLeft(420).reduced(0, 3));
+    micRow.removeFromLeft(12);
+    previewMicBox.setBounds(micRow.removeFromLeft(160).reduced(0, 4));
 
     area.removeFromTop(12);
     auto buttonRow = area.removeFromTop(36);
@@ -269,20 +286,12 @@ void TonePreviewPanel::timerCallback()
 
 void TonePreviewPanel::applyPreviewControlLabels()
 {
-    if (previewSourceMode == PreviewSourceMode::CabinetPackage)
-    {
-        gainSlider.setTextValueSuffix("% Mic");
-        ampLabel.setText("HANSO CAB\nMic Position", juce::dontSendNotification);
-        previewMicBox.setVisible(true);
-        cabSourceBox.setVisible(false);
-    }
-    else
-    {
-        gainSlider.setTextValueSuffix("% Gain");
-        ampLabel.setText("HANSO AMP\nPreview Cabinet", juce::dontSendNotification);
-        previewMicBox.setVisible(false);
-        cabSourceBox.setVisible(previewSourceMode == PreviewSourceMode::AmpModel);
-    }
+    // Cabinet-slot controls appear when a cabinet package occupies the slot;
+    // the standard-cab source combo shows while the slot is at its default.
+    const auto cabLoaded = capture.hasPreviewCabinetPackage();
+    micPositionSlider.setVisible(cabLoaded);
+    previewMicBox.setVisible(cabLoaded);
+    cabSourceBox.setVisible(! cabLoaded);
 }
 
 void TonePreviewPanel::handleCabSourceSelection()
@@ -323,73 +332,124 @@ void TonePreviewPanel::refreshChainStrip()
     using Block = PreviewChainStrip::Block;
     using Kind = PreviewChainStrip::BlockKind;
 
+    // The full rig skeleton is always shown: Pedal -> Amp Head -> Cabinet.
+    // Slots at their defaults are clean standard equipment (dashed); captured
+    // or imported packages fill them solid and can be reset individually.
     std::vector<Block> blocks;
-    blocks.push_back({ "Sample", utf8("클린 DI"), Kind::Io });
+    blocks.push_back({ "sample", "Sample", utf8("클린 DI"), Kind::Io, false, false });
 
-    if (previewSourceMode == PreviewSourceMode::CabinetPackage)
+    if (pedalSlotSource != RigSlotSource::Default)
+        blocks.push_back({ "pedal", "Pedal",
+                           (pedalSlotSource == RigSlotSource::Session ? utf8("세션 캡쳐") : utf8("불러옴")),
+                           Kind::Package, true, false });
+    else
+        blocks.push_back({ "pedal", "Pedal", utf8("비어 있음"), Kind::Complement, false, false });
+
+    const auto ampCaptured = modelReady && ampSlotSource != RigSlotSource::Default;
+    const auto isFullRig = ampCaptured && loadedDeviceLabel == "FullRig";
+    const auto isPreampOnly = ampCaptured && loadedDeviceLabel == "PreAmp";
+    const auto ampSourceText = ampSlotSource == RigSlotSource::Session ? utf8("세션 캡쳐") : utf8("불러옴");
+
+    if (isFullRig)
     {
-        blocks.push_back({ "Amp", "Neutral DI", Kind::Complement });
-        blocks.push_back({ "Cab",
-                           capture.previewCabinetHasMicMatrix() ? utf8("패키지 · IR+micMatrix")
-                                                                : utf8("패키지 · IR"),
-                           Kind::Package });
+        blocks.push_back({ "amp", "Full Rig", ampSourceText + utf8(" · amp+cab"), Kind::Package, true, false });
     }
-    else if (previewSourceMode == PreviewSourceMode::AmpModel && modelReady)
+    else if (isPreampOnly)
     {
-        const auto device = loadedDeviceLabel.isNotEmpty() ? loadedDeviceLabel : juce::String("Amp");
-        const auto isPedal = device == "Pedal" || device == "Effect";
-        const auto cabOn = capture.isPreviewCabinetEnabled();
-        const auto complementCabSubtitle = capture.previewComplementCabUseCustom()
-                                         ? capture.previewComplementCabSummary() + utf8(" · 보완")
-                                         : utf8("Standard EQ · 보완");
-
-        if (device == "FullRig")
-        {
-            blocks.push_back({ "Full Rig", utf8("패키지 · amp+cab 포함"), Kind::Package });
-        }
-        else if (device == "PreAmp")
-        {
-            blocks.push_back({ "PreAmp", utf8("패키지"), Kind::Package });
-            blocks.push_back({ "Power", utf8("Neutral · unity"), Kind::Complement });
-        }
-        else if (isPedal)
-        {
-            blocks.push_back({ "Pedal", utf8("패키지"), Kind::Package });
-        }
-        else
-        {
-            blocks.push_back({ device == "Amp" ? juce::String("Amp Head") : device,
-                               utf8("패키지"), Kind::Package });
-        }
-
-        // Pedal context: FRFR audition by default, or a neutral clean amp in
-        // front of the complement cab when the rig context is enabled.
-        if (isPedal)
-        {
-            if (cabOn)
-            {
-                blocks.push_back({ "Amp", utf8("Neutral clean · 보완"), Kind::Complement });
-                blocks.push_back({ "Cab", complementCabSubtitle, Kind::Complement });
-            }
-            else
-            {
-                blocks.push_back({ "Cab", utf8("FRFR · 무착색"), Kind::Complement });
-            }
-        }
-        else if (cabOn)
-        {
-            // Shown for full rig too when the user forces the toggle on, so
-            // the strip always matches what the audio chain renders.
-            blocks.push_back({ "Cab", complementCabSubtitle, Kind::Complement });
-        }
+        // A captured preamp keeps the amp-head slot split open: captured
+        // preamp plus the clean power-amp placeholder (.hanso power amps are
+        // in production elsewhere).
+        blocks.push_back({ "preamp", "PreAmp", ampSourceText, Kind::Package, true, false });
+        blocks.push_back({ "power", "Power", utf8("Clean · placeholder"), Kind::Complement, false, false });
+    }
+    else if (ampExpanded && ! ampCaptured)
+    {
+        blocks.push_back({ "amp", "PreAmp", utf8("Clean · 무착색"), Kind::Complement, false, true });
+        blocks.push_back({ "power", "Power", utf8("Clean · placeholder"), Kind::Complement, false, false });
+    }
+    else if (ampCaptured)
+    {
+        blocks.push_back({ "amp", "Amp Head", ampSourceText, Kind::Package, true, false });
     }
     else
     {
-        blocks.push_back({ "Model", utf8("없음 · 클린 재생"), Kind::Io });
+        blocks.push_back({ "amp", "Amp Head", utf8("Clean standard"), Kind::Complement, false, true });
     }
 
-    blocks.push_back({ "Out", {}, Kind::Io });
+    if (! isFullRig)
+    {
+        if (cabSlotSource != RigSlotSource::Default)
+        {
+            const auto detail = capture.previewCabinetHasMicMatrix() ? utf8(" · IR+micMatrix") : utf8(" · IR");
+            blocks.push_back({ "cab", "Cab",
+                               (cabSlotSource == RigSlotSource::Session ? utf8("세션 캡쳐") : utf8("불러옴")) + detail,
+                               Kind::Package, true, false });
+        }
+        else if (capture.isPreviewCabinetEnabled())
+        {
+            const auto subtitle = capture.previewComplementCabUseCustom()
+                                ? capture.previewComplementCabSummary()
+                                : juce::String("Standard EQ");
+            blocks.push_back({ "cab", "Cab", subtitle, Kind::Complement,
+                               capture.previewComplementCabUseCustom(), false });
+        }
+        else
+        {
+            blocks.push_back({ "cab", "Cab", utf8("FRFR · 무착색"), Kind::Complement, false, false });
+        }
+    }
+
+    blocks.push_back({ "out", "Out", {}, Kind::Io, false, false });
     chainStrip.setBlocks(std::move(blocks));
+}
+
+void TonePreviewPanel::handleChainBlockClicked(const juce::String& blockId)
+{
+    if (blockId == "amp" && ! (modelReady && ampSlotSource != RigSlotSource::Default))
+    {
+        ampExpanded = ! ampExpanded;
+        refreshChainStrip();
+    }
+}
+
+void TonePreviewPanel::handleChainBlockReset(const juce::String& blockId)
+{
+    if (blockId == "pedal")
+    {
+        capture.clearPreviewPedalModel();
+        pedalSlotSource = RigSlotSource::Default;
+        pedalSlotLabel.clear();
+        statusLabel.setText(utf8("Pedal 슬롯을 비웠습니다."), juce::dontSendNotification);
+    }
+    else if (blockId == "amp" || blockId == "preamp")
+    {
+        const auto wasFullRig = loadedDeviceLabel == "FullRig";
+        capture.clearPreviewModel();
+        ampSlotSource = RigSlotSource::Default;
+        loadedDeviceLabel.clear();
+        modelReady = false;
+        model = {};
+        observedPreviewRevision = capture.previewModelRevision();
+        if (wasFullRig || ! capture.hasPreviewCabinetPackage())
+            capture.setPreviewCabinetEnabled(true);
+        statusLabel.setText(utf8("Amp 슬롯을 클린 표준 앰프로 되돌렸습니다."), juce::dontSendNotification);
+    }
+    else if (blockId == "cab")
+    {
+        if (capture.hasPreviewCabinetPackage())
+        {
+            capture.clearPreviewCabinetPackage();
+            observedPreviewCabinetRevision = capture.previewCabinetRevision();
+        }
+        capture.setPreviewComplementCabUseCustom(false);
+        capture.setPreviewCabinetEnabled(true);
+        cabSlotSource = RigSlotSource::Default;
+        cabSlotLabel.clear();
+        applyPreviewControlLabels();
+        statusLabel.setText(utf8("Cabinet 슬롯을 표준 캐비넷으로 되돌렸습니다."), juce::dontSendNotification);
+    }
+
+    updateButtonState();
 }
 
 bool TonePreviewPanel::isCabinetPackage(const HansoPackage& package) const noexcept
@@ -403,64 +463,26 @@ bool TonePreviewPanel::isCabinetPackage(const HansoPackage& package) const noexc
     return false;
 }
 
-bool TonePreviewPanel::loadCabinetPackageFromFile(const juce::File& file, HansoPackage& package)
-{
-    juce::String error;
-    if (! HansoSerializer::readFromFile(file, package, error))
-    {
-        statusLabel.setText("Open HANSO failed: " + error, juce::dontSendNotification);
-        modelLabel.setText("Open HANSO failed: " + error, juce::dontSendNotification);
-        return false;
-    }
-
-    if (! isCabinetPackage(package))
-        return false;
-
-    if (! capture.loadPreviewCabinetPackage(package))
-    {
-        statusLabel.setText(utf8("캐비넷 .hanso를 프리뷰할 수 없습니다. captured/imported IR이 필요합니다."),
-                            juce::dontSendNotification);
-        modelLabel.setText(utf8("Cabinet preview unavailable"), juce::dontSendNotification);
-        return false;
-    }
-
-    previewSourceMode = PreviewSourceMode::CabinetPackage;
-    model = {};
-    modelReady = true;
-    observedPreviewCabinetRevision = capture.previewCabinetRevision();
-    observedPreviewRevision = capture.previewModelRevision();
-    applyPreviewControlLabels();
-    capture.setPreviewMicPositionPercent(static_cast<float>(gainSlider.getValue()));
-    previewMicBox.setSelectedId(1, juce::dontSendNotification);
-    capture.setPreviewCabinetMicClass(CabinetMicClass::Unknown);
-
-    const auto toneName = package.metadata.name.trim().isNotEmpty()
-                        ? package.metadata.name.trim()
-                        : file.getFileNameWithoutExtension();
-    modelLabel.setText(utf8("Cabinet Preview: ") + toneName, juce::dontSendNotification);
-    statusLabel.setText("Opened cabinet HANSO: " + file.getFileName(), juce::dontSendNotification);
-    return true;
-}
-
 void TonePreviewPanel::loadInitialPreviewModel()
 {
     if (capture.hasPreviewCabinetPackage())
     {
-        previewSourceMode = PreviewSourceMode::CabinetPackage;
-        modelReady = true;
-        observedPreviewCabinetRevision = capture.previewCabinetRevision();
-        applyPreviewControlLabels();
-        modelLabel.setText(utf8("Cabinet preview loaded."), juce::dontSendNotification);
-        return;
+        cabSlotSource = RigSlotSource::Session;
+        cabSlotLabel = capture.previewCabinetSummary();
+    }
+    observedPreviewCabinetRevision = capture.previewCabinetRevision();
+
+    if (capture.hasPreviewPedalModel())
+    {
+        pedalSlotSource = RigSlotSource::Session;
+        pedalSlotLabel = capture.previewPedalSummary();
     }
 
     if (const auto* currentModel = capture.currentPreviewModel())
     {
         model = *currentModel;
-        previewSourceMode = PreviewSourceMode::AmpModel;
         modelReady = true;
-        capture.setPreviewCabinetEnabled(
-            previewComplementCabDefaultForCaptureType(appState.captureWizard().captureType));
+        ampSlotSource = RigSlotSource::Session;
         loadedDeviceLabel = toString(appState.captureWizard().captureType);
         observedPreviewRevision = capture.previewModelRevision();
         applyPreviewControlLabels();
@@ -477,10 +499,10 @@ void TonePreviewPanel::loadModelFromPackage()
     if (chunk == nullptr)
     {
         modelReady = false;
-        previewSourceMode = PreviewSourceMode::Clean;
+        ampSlotSource = RigSlotSource::Default;
         observedPreviewRevision = capture.previewModelRevision();
         applyPreviewControlLabels();
-        modelLabel.setText(utf8("Clean preview: 모델 없이 원본 샘플을 재생합니다."), juce::dontSendNotification);
+        modelLabel.setText(utf8("클린 프리뷰: 표준 체인으로 원본 샘플을 재생합니다."), juce::dontSendNotification);
         return;
     }
 
@@ -488,17 +510,18 @@ void TonePreviewPanel::loadModelFromPackage()
     modelReady = HansoModelCodec::decodeCompactModel(chunk->data, model, error);
     if (! modelReady)
     {
-        previewSourceMode = PreviewSourceMode::Clean;
+        ampSlotSource = RigSlotSource::Default;
         modelLabel.setText("Model decode failed: " + error, juce::dontSendNotification);
         return;
     }
 
     capture.loadPreviewModel(model);
     capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
-    capture.setPreviewCabinetEnabled(
-        previewComplementCabDefaultForCaptureType(appState.captureWizard().captureType));
+    if (! capture.hasPreviewCabinetPackage())
+        capture.setPreviewCabinetEnabled(
+            previewComplementCabDefaultForCaptureType(appState.captureWizard().captureType));
     loadedDeviceLabel = toString(appState.captureWizard().captureType);
-    previewSourceMode = PreviewSourceMode::AmpModel;
+    ampSlotSource = RigSlotSource::Session;
     observedPreviewRevision = capture.previewModelRevision();
     applyPreviewControlLabels();
     modelLabel.setText(utf8("Unsaved current tone: ") + model.summary(), juce::dontSendNotification);
@@ -506,49 +529,162 @@ void TonePreviewPanel::loadModelFromPackage()
 
 bool TonePreviewPanel::loadModelFromHansoFile(const juce::File& file)
 {
-    HansoPackage package;
-    if (loadCabinetPackageFromFile(file, package))
-        return true;
-
+    auto package = std::make_shared<HansoPackage>();
     juce::String error;
-    if (! HansoSerializer::readFromFile(file, package, error))
+    if (! HansoSerializer::readFromFile(file, *package, error))
     {
         statusLabel.setText("Open HANSO failed: " + error, juce::dontSendNotification);
         modelLabel.setText("Open HANSO failed: " + error, juce::dontSendNotification);
         return false;
     }
 
+    // Classify the package, name its target slot, and confirm before loading —
+    // especially when the load would replace an unsaved session capture.
+    const auto cabinet = isCabinetPackage(*package);
+    const auto deviceType = package->metadata.deviceType;
+    const auto pedal = ! cabinet
+                       && (deviceType == "Pedal" || deviceType == "Effect"
+                           || package->metadata.category == HansoCategory::Pedal);
+    const auto fullRig = ! cabinet && ! pedal
+                         && (deviceType == "FullRig" || package->metadata.category == HansoCategory::Rig);
+
+    juce::String typeLabel, targetLabel;
+    bool displacesSession = false;
+    if (cabinet)
+    {
+        typeLabel = "Cabinet";
+        targetLabel = "Cabinet";
+        displacesSession = cabSlotSource == RigSlotSource::Session;
+    }
+    else if (pedal)
+    {
+        typeLabel = "Pedal / Effect";
+        targetLabel = "Pedal";
+        displacesSession = pedalSlotSource == RigSlotSource::Session;
+    }
+    else if (fullRig)
+    {
+        typeLabel = "Full Rig (amp+cab)";
+        targetLabel = "Amp Head + Cabinet";
+        displacesSession = ampSlotSource == RigSlotSource::Session
+                           || cabSlotSource == RigSlotSource::Session;
+    }
+    else
+    {
+        typeLabel = deviceType.isNotEmpty() ? deviceType : toString(package->metadata.category);
+        targetLabel = "Amp Head";
+        displacesSession = ampSlotSource == RigSlotSource::Session;
+    }
+
+    auto message = utf8("파일 타입: ") + typeLabel + "\n"
+                 + utf8("대상 슬롯: ") + targetLabel;
+    if (displacesSession && appState.hasUnsavedCaptureData())
+        message += utf8("\n\n경고: 저장(Export)되지 않은 캡쳐가 프리뷰 체인에서 대체되며 되돌릴 수 없습니다. "
+                        "유지하려면 먼저 Export 하세요.");
+
+    auto options = juce::MessageBoxOptions()
+        .withIconType(displacesSession ? juce::MessageBoxIconType::WarningIcon
+                                       : juce::MessageBoxIconType::QuestionIcon)
+        .withTitle("Open HANSO: " + file.getFileName())
+        .withMessage(message)
+        .withButton("Load")
+        .withButton("Cancel")
+        .withAssociatedComponent(this);
+
+    juce::AlertWindow::showAsync(options, [this, package, file](int result)
+    {
+        if (result == 1)
+            routeHansoPackage(package, file);
+    });
+
+    return true;
+}
+
+void TonePreviewPanel::routeHansoPackage(std::shared_ptr<HansoPackage> package, const juce::File& file)
+{
+    const auto toneName = package->metadata.name.trim().isNotEmpty()
+                        ? package->metadata.name.trim()
+                        : file.getFileNameWithoutExtension();
+
+    if (isCabinetPackage(*package))
+    {
+        if (! capture.loadPreviewCabinetPackage(*package))
+        {
+            statusLabel.setText(utf8("캐비넷 .hanso를 프리뷰할 수 없습니다. captured/imported IR이 필요합니다."),
+                                juce::dontSendNotification);
+            return;
+        }
+
+        cabSlotSource = RigSlotSource::Imported;
+        cabSlotLabel = toneName;
+        observedPreviewCabinetRevision = capture.previewCabinetRevision();
+        capture.setPreviewMicPositionPercent(static_cast<float>(micPositionSlider.getValue()));
+        previewMicBox.setSelectedId(1, juce::dontSendNotification);
+        capture.setPreviewCabinetMicClass(CabinetMicClass::Unknown);
+        applyPreviewControlLabels();
+        modelLabel.setText(utf8("Cabinet 슬롯: ") + toneName, juce::dontSendNotification);
+        statusLabel.setText("Opened cabinet HANSO: " + file.getFileName(), juce::dontSendNotification);
+        updateButtonState();
+        return;
+    }
+
     CompactHansoModel loadedModel;
     juce::String statusText;
-    if (! loadCompactModelChunk(package, file, loadedModel, statusText))
+    if (! loadCompactModelChunk(*package, file, loadedModel, statusText))
     {
         statusLabel.setText(statusText, juce::dontSendNotification);
         modelLabel.setText(statusText, juce::dontSendNotification);
-        return false;
+        return;
     }
 
-    capture.clearPreviewCabinetPackage();
+    const auto deviceType = package->metadata.deviceType;
+    const auto pedal = deviceType == "Pedal" || deviceType == "Effect"
+                       || package->metadata.category == HansoCategory::Pedal;
+
+    if (pedal)
+    {
+        if (capture.loadPreviewPedalModel(loadedModel))
+        {
+            pedalSlotSource = RigSlotSource::Imported;
+            pedalSlotLabel = toneName;
+            observedPreviewRevision = capture.previewModelRevision();
+            modelLabel.setText(utf8("Pedal 슬롯: ") + toneName, juce::dontSendNotification);
+            statusLabel.setText(statusText, juce::dontSendNotification);
+        }
+        updateButtonState();
+        return;
+    }
+
     model = std::move(loadedModel);
     modelReady = capture.loadPreviewModel(model);
     if (modelReady)
     {
         capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
-        capture.setPreviewCabinetEnabled(previewComplementCabDefaultForPackage(package.metadata.deviceType,
-                                                                               package.metadata.category));
-        loadedDeviceLabel = package.metadata.deviceType.isNotEmpty()
-                          ? package.metadata.deviceType
-                          : toString(package.metadata.category);
+        ampSlotSource = RigSlotSource::Imported;
+        loadedDeviceLabel = deviceType.isNotEmpty() ? deviceType : toString(package->metadata.category);
+
+        if (loadedDeviceLabel == "FullRig" || package->metadata.category == HansoCategory::Rig)
+        {
+            // A full rig bundles amp+cab: it displaces the cabinet slot.
+            loadedDeviceLabel = "FullRig";
+            capture.clearPreviewCabinetPackage();
+            capture.setPreviewComplementCabUseCustom(false);
+            cabSlotSource = RigSlotSource::Default;
+            cabSlotLabel.clear();
+            capture.setPreviewCabinetEnabled(false);
+        }
+        else if (! capture.hasPreviewCabinetPackage())
+        {
+            capture.setPreviewCabinetEnabled(previewComplementCabDefaultForPackage(package->metadata.deviceType,
+                                                                                   package->metadata.category));
+        }
     }
-    previewSourceMode = modelReady ? PreviewSourceMode::AmpModel : PreviewSourceMode::Clean;
     observedPreviewRevision = capture.previewModelRevision();
     observedPreviewCabinetRevision = capture.previewCabinetRevision();
     applyPreviewControlLabels();
-    const auto toneName = package.metadata.name.trim().isNotEmpty()
-                        ? package.metadata.name.trim()
-                        : file.getFileNameWithoutExtension();
     modelLabel.setText("Preview Tone: " + toneName, juce::dontSendNotification);
     statusLabel.setText(statusText, juce::dontSendNotification);
-    return modelReady;
+    updateButtonState();
 }
 
 bool TonePreviewPanel::loadCompactModelChunk(HansoPackage& package,
@@ -606,29 +742,28 @@ void TonePreviewPanel::openHansoFile()
 
 void TonePreviewPanel::syncModelFromCaptureEngine()
 {
+    // Session captures land in the rig via engine revision bumps; imports set
+    // their tags and observed revisions directly, so anything new seen here
+    // came from the capture workflow.
     const auto cabinetRevision = capture.previewCabinetRevision();
     if (cabinetRevision != observedPreviewCabinetRevision)
     {
         observedPreviewCabinetRevision = cabinetRevision;
         if (capture.hasPreviewCabinetPackage())
         {
-            previewSourceMode = PreviewSourceMode::CabinetPackage;
-            modelReady = true;
-            capture.setPreviewMicPositionPercent(static_cast<float>(gainSlider.getValue()));
-            applyPreviewControlLabels();
+            cabSlotSource = RigSlotSource::Session;
+            cabSlotLabel = capture.previewCabinetSummary();
+            capture.setPreviewMicPositionPercent(static_cast<float>(micPositionSlider.getValue()));
             previewMicBox.setSelectedId(1, juce::dontSendNotification);
             capture.setPreviewCabinetMicClass(CabinetMicClass::Unknown);
-            modelLabel.setText(utf8("Cabinet preview active."), juce::dontSendNotification);
-            return;
+            modelLabel.setText(utf8("Cabinet 슬롯: 세션 캡쳐가 삽입되었습니다."), juce::dontSendNotification);
         }
-
-        if (previewSourceMode == PreviewSourceMode::CabinetPackage)
+        else
         {
-            previewSourceMode = PreviewSourceMode::Clean;
-            modelReady = false;
-            applyPreviewControlLabels();
-            modelLabel.setText(utf8("Clean preview: 모델 없이 원본 샘플을 재생합니다."), juce::dontSendNotification);
+            cabSlotSource = RigSlotSource::Default;
+            cabSlotLabel.clear();
         }
+        applyPreviewControlLabels();
     }
 
     const auto revision = capture.previewModelRevision();
@@ -636,25 +771,55 @@ void TonePreviewPanel::syncModelFromCaptureEngine()
         return;
 
     observedPreviewRevision = revision;
+
+    if (capture.hasPreviewPedalModel())
+    {
+        if (pedalSlotSource == RigSlotSource::Default)
+        {
+            pedalSlotSource = RigSlotSource::Session;
+            modelLabel.setText(utf8("Pedal 슬롯: 세션 캡쳐가 삽입되었습니다."), juce::dontSendNotification);
+        }
+        pedalSlotLabel = capture.previewPedalSummary();
+    }
+    else
+    {
+        pedalSlotSource = RigSlotSource::Default;
+        pedalSlotLabel.clear();
+    }
+
     if (const auto* currentModel = capture.currentPreviewModel())
     {
         model = *currentModel;
-        previewSourceMode = PreviewSourceMode::AmpModel;
         modelReady = true;
-        capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
-        capture.setPreviewCabinetEnabled(
-            previewComplementCabDefaultForCaptureType(appState.captureWizard().captureType));
+        ampSlotSource = RigSlotSource::Session;
         loadedDeviceLabel = toString(appState.captureWizard().captureType);
+        capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
+
+        if (loadedDeviceLabel == "FullRig")
+        {
+            // A full rig capture bundles amp+cab and displaces the cab slot.
+            capture.clearPreviewCabinetPackage();
+            capture.setPreviewComplementCabUseCustom(false);
+            cabSlotSource = RigSlotSource::Default;
+            cabSlotLabel.clear();
+            capture.setPreviewCabinetEnabled(false);
+        }
+        else if (! capture.hasPreviewCabinetPackage())
+        {
+            capture.setPreviewCabinetEnabled(
+                previewComplementCabDefaultForCaptureType(appState.captureWizard().captureType));
+        }
+
         applyPreviewControlLabels();
-        modelLabel.setText(utf8("Current preview tone: ") + model.summary(), juce::dontSendNotification);
+        modelLabel.setText(utf8("Amp 슬롯: ") + model.summary(), juce::dontSendNotification);
     }
-    else if (previewSourceMode != PreviewSourceMode::CabinetPackage)
+    else
     {
         model = {};
-        previewSourceMode = PreviewSourceMode::Clean;
         modelReady = false;
+        ampSlotSource = RigSlotSource::Default;
+        loadedDeviceLabel.clear();
         applyPreviewControlLabels();
-        modelLabel.setText(utf8("Clean preview: 모델 없이 원본 샘플을 재생합니다."), juce::dontSendNotification);
     }
 }
 
@@ -734,7 +899,7 @@ void TonePreviewPanel::playSelectedSample()
         return;
     }
 
-    if (modelReady && ! capture.hasPreviewModel() && previewSourceMode == PreviewSourceMode::AmpModel)
+    if (modelReady && ! capture.hasPreviewModel())
         loadModelFromPackage();
 
     waveform.setAudioBuffer(sample, capture.currentSampleRate());
@@ -819,7 +984,7 @@ void TonePreviewPanel::toggleRealCaptureMode()
     else
     {
         capture.stopPreviewSample();
-        if (previewSourceMode == PreviewSourceMode::AmpModel)
+        if (modelReady)
             loadModelFromPackage();
         statusLabel.setText(utf8("Model 모드: compact model 렌더로 재생합니다."), juce::dontSendNotification);
     }
@@ -834,13 +999,7 @@ void TonePreviewPanel::stopPlayback()
 
 void TonePreviewPanel::updateGainModel()
 {
-    if (! modelReady)
-        return;
-
-    if (previewSourceMode == PreviewSourceMode::CabinetPackage)
-        capture.setPreviewMicPositionPercent(static_cast<float>(gainSlider.getValue()));
-    else
-        capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
+    capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
 }
 
 void TonePreviewPanel::updateButtonState()
@@ -848,17 +1007,16 @@ void TonePreviewPanel::updateButtonState()
     const auto hasSelection = sampleList.getSelectedRow() >= 0 && sampleList.getSelectedRow() < samples.size();
     playButton.setEnabled(hasSelection);
     stopButton.setEnabled(capture.isPreviewSamplePlaying());
+    const auto cabPackageLoaded = capture.hasPreviewCabinetPackage();
     gainSlider.setEnabled(modelReady);
-    cabinetButton.setEnabled(modelReady && previewSourceMode == PreviewSourceMode::AmpModel);
-    previewMicBox.setEnabled(previewSourceMode == PreviewSourceMode::CabinetPackage
-                             && capture.previewCabinetHasMicMatrix());
-    cabSourceBox.setEnabled(previewSourceMode == PreviewSourceMode::AmpModel
-                            && capture.isPreviewCabinetEnabled());
+    cabinetButton.setEnabled(! cabPackageLoaded);
+    micPositionSlider.setEnabled(cabPackageLoaded);
+    previewMicBox.setEnabled(cabPackageLoaded && capture.previewCabinetHasMicMatrix());
+    cabSourceBox.setEnabled(! cabPackageLoaded && capture.isPreviewCabinetEnabled());
     if (! cabSourceBox.isPopupActive() && complementCabChooser == nullptr)
         cabSourceBox.setSelectedId(capture.previewComplementCabUseCustom() ? 2 : 1,
                                    juce::dontSendNotification);
-    realCaptureButton.setEnabled(previewSourceMode == PreviewSourceMode::AmpModel
-                                 && realCaptureChunkIdForSelection().isNotEmpty());
+    realCaptureButton.setEnabled(modelReady && realCaptureChunkIdForSelection().isNotEmpty());
     loopButton.setToggleState(capture.isPreviewLoopEnabled(), juce::dontSendNotification);
     normalizationButton.setToggleState(capture.isPreviewNormalizationEnabled(), juce::dontSendNotification);
     cabinetButton.setToggleState(capture.isPreviewCabinetEnabled(), juce::dontSendNotification);

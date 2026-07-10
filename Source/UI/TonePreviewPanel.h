@@ -12,13 +12,6 @@
 
 namespace hanso
 {
-enum class PreviewSourceMode
-{
-    Clean,
-    AmpModel,
-    CabinetPackage
-};
-
 class TonePreviewPanel final : public juce::Component,
                                private juce::ListBoxModel,
                                private juce::Timer
@@ -44,11 +37,13 @@ private:
     void loadInitialPreviewModel();
     void loadModelFromPackage();
     bool loadModelFromHansoFile(const juce::File& file);
-    bool loadCabinetPackageFromFile(const juce::File& file, HansoPackage& package);
     bool isCabinetPackage(const HansoPackage& package) const noexcept;
+    void routeHansoPackage(std::shared_ptr<HansoPackage> package, const juce::File& file);
     void applyPreviewControlLabels();
     void refreshChainStrip();
     void handleCabSourceSelection();
+    void handleChainBlockClicked(const juce::String& blockId);
+    void handleChainBlockReset(const juce::String& blockId);
     bool loadCompactModelChunk(HansoPackage& package,
                                const juce::File& sourceFile,
                                CompactHansoModel& destination,
@@ -73,8 +68,21 @@ private:
     ApplicationState& appState;
     CaptureEngine& capture;
     CompactHansoModel model;
-    PreviewSourceMode previewSourceMode { PreviewSourceMode::Clean };
-    bool modelReady { false };
+    // Preview rig slot occupancy. Every slot always exists in the chain;
+    // Default means the clean standard equipment (empty for the pedal slot).
+    enum class RigSlotSource
+    {
+        Default,
+        Session,
+        Imported
+    };
+    RigSlotSource pedalSlotSource { RigSlotSource::Default };
+    RigSlotSource ampSlotSource { RigSlotSource::Default };
+    RigSlotSource cabSlotSource { RigSlotSource::Default };
+    juce::String pedalSlotLabel;
+    juce::String cabSlotLabel;
+    bool ampExpanded { false };
+    bool modelReady { false }; // amp slot holds a captured model
     int observedPreviewRevision { -1 };
     int observedPreviewCabinetRevision { -1 };
     juce::AudioFormatManager formatManager;
@@ -91,9 +99,10 @@ private:
     // the package block title in the chain strip.
     juce::String loadedDeviceLabel;
     juce::Slider gainSlider;
-    // Cabinet package mode only: mic-swap EQ preview from cabProfile.micMatrix.
+    // Cabinet slot controls, shown when a cabinet package occupies the slot.
+    juce::Slider micPositionSlider;
     juce::ComboBox previewMicBox;
-    // Amp-model mode only: complement cab source (standard EQ / custom .hanso IR).
+    // Standard cab controls, shown while the cabinet slot is at its default.
     juce::ComboBox cabSourceBox;
     std::unique_ptr<juce::FileChooser> complementCabChooser;
     juce::ListBox sampleList { "Preview Samples", this };

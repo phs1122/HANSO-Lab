@@ -135,6 +135,9 @@ target_sources(HANSO_Lab_Tests PRIVATE
     Source/Analysis/CaptureQualityAnalyzer.cpp
     Source/Analysis/ModelExtractionEngine.cpp
     Source/Analysis/ModelFidelityEvaluator.cpp
+    Source/Audio/CaptureAudioSource.cpp
+    Source/Audio/PreviewCabinetIrProcessor.cpp
+    Source/Audio/PreviewCabinetProcessor.cpp
     Source/Audio/PreviewMicColorProcessor.cpp
     Source/Audio/PreviewModelProcessor.cpp
     Source/Capture/CaptureRecipe.cpp

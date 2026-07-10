@@ -69,12 +69,18 @@ public:
     const CaptureSession& currentSession() const noexcept;
     bool hasCompletedCapture() const noexcept;
     bool loadPreviewModel(const CompactHansoModel& model);
+    // Pedal slot of the preview rig (rendered in front of the amp slot).
+    bool loadPreviewPedalModel(const CompactHansoModel& model);
+    void clearPreviewPedalModel();
+    bool hasPreviewPedalModel() const noexcept;
+    juce::String previewPedalSummary() const;
     void setPreviewGainPercent(float percent);
     void clearPreviewModel();
     bool loadPreviewCabinetPackage(const HansoPackage& package);
     void setPreviewMicPositionPercent(float percent);
     void setPreviewCabinetMicClass(CabinetMicClass micClass);
     bool previewCabinetHasMicMatrix() const noexcept;
+    juce::String previewCabinetSummary() const;
     // Complement cab for model previews: user-chosen cabinet .hanso (IR) as
     // an alternative to the built-in standard EQ. Session-scoped.
     bool loadPreviewComplementCabFile(const juce::File& file);

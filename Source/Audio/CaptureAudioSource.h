@@ -48,6 +48,12 @@ public:
     bool loadPreviewModel(const CompactHansoModel& model);
     void setPreviewGainPercent(float percent) noexcept;
     void clearPreviewModel() noexcept;
+    // Pedal slot: a second capture model rendered in front of the amp slot.
+    bool loadPreviewPedalModel(const CompactHansoModel& model);
+    void setPreviewPedalGainPercent(float percent) noexcept;
+    void clearPreviewPedalModel() noexcept;
+    bool hasPreviewPedalModel() const noexcept;
+    juce::String previewPedalSummary() const;
     bool loadPreviewCabinetPackage(const HansoPackage& package, juce::String& error);
     void setPreviewMicPositionNormalized(float normalizedPosition) noexcept;
     // Mic-swap EQ preview from cabProfile.micMatrix. Unknown = original mic.
@@ -100,6 +106,7 @@ private:
     juce::AudioBuffer<float> previewSampleSignal;
     juce::AudioBuffer<float> previewScratchBuffer;
     PreviewModelProcessor previewProcessor;
+    PreviewModelProcessor pedalProcessor;
     PreviewCabinetProcessor cabinetProcessor;
     PreviewCabinetIrProcessor cabinetIrProcessor;
     PreviewCabinetIrProcessor complementCabIrProcessor;

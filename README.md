@@ -131,12 +131,18 @@ Export 시 `cabProfile.micMatrix`에 **모든 (마이크 클래스 × 마이크 
 Tone Preview는 **샘플 기반** 프리뷰다. 피드백 루프 위험 때문에 라이브 입력 프리뷰는 지원하지 않는다.
 
 ```
-샘플 재생 → Compact HANSO Model → (보완 Cabinet: Standard EQ 또는 Custom .hanso IR) → (Normalization) → 볼륨 → 출력
+샘플 재생 → [Pedal 슬롯] → [Amp Head 슬롯] → [Cabinet 슬롯] → (Normalization) → 볼륨 → 출력
 ```
 
-### 보완 체인 (complement chain)
+### 프리뷰 리그 (preview rig)
 
-프리뷰는 캡쳐 타입에 따라 부족한 체인 스테이지를 자동으로 보완한다: Amp Head/PreAmp는 보완 캐비넷을 붙이고, Full Rig(amp+cab 포함)와 Pedal(FRFR 기준)·Cabinet은 무착색으로 재생한다. 패널 상단의 **체인 스트립**이 현재 체인을 보여주며, 실선 블록은 캡쳐된 패키지, 점선 블록은 프리뷰 전용 보완이다. 보완 캐비넷 소스는 `Cab:` 콤보로 내장 Standard EQ 또는 사용자 캐비넷 `.hanso`(IR 컨볼루션) 중 선택할 수 있다(세션 스코프). 보완 설정은 `.hanso`에 기록되지 않으며, 패키지는 자신이 담는 스테이지를 `modelData.chainCoverage`로 명시한다.
+Tone Preview는 캡쳐 여부와 무관하게 **항상 고정된 풀 시그널 체인**을 표시한다. 각 슬롯의 기본값은 클린 표준 장비다: Pedal은 비움(바이패스), Amp Head는 클린 표준(무착색 unity, 클릭 시 PreAmp+PowerAmp로 확장 — 파워앰프 `.hanso`는 별도 제작 중이라 현재 placeholder), Cabinet은 표준 캡(Standard EQ 또는 Custom `.hanso` IR).
+
+- **Finish Capture 완료 시** 캡쳐 타입에 따라 직전 캡쳐가 해당 슬롯에 자동 삽입된다: Pedal→Pedal 슬롯, Amp→Amp 슬롯, PreAmp→Amp 내 PreAmp 서브슬롯(+클린 파워앰프, 표준 캡 유지), Cabinet→Cabinet 슬롯(IR+micMatrix), Full Rig→Amp+Cab을 묶은 단일 블록.
+- 슬롯은 위저드 리셋 후에도 유지되므로 여러 파트를 차례로 캡쳐해 리그를 조립할 수 있고, 각 블록의 **✕ 버튼으로 기본 장비로 되돌릴 수 있다**.
+- 체인 스트립에서 실선(초록) 블록은 캡쳐/불러온 패키지, 점선 블록은 클린 표준 장비다.
+- **Open HANSO**는 파일 타입과 대상 슬롯을 확인창으로 보여준 뒤 로드하며, 저장되지 않은 세션 캡쳐가 대체될 경우 경고한다.
+- Cabinet 슬롯에 패키지가 있으면 Mic Position 슬라이더와 Mic 콤보(micMatrix)가 나타난다. 프리뷰 리그 구성은 `.hanso`에 기록되지 않으며, 패키지는 자신이 담는 스테이지를 `modelData.chainCoverage`로 명시한다.
 
 - Amp 패키지: Gain 파라미터로 anchor 사이를 보간하며 audition한다.
 - Cabinet `.hanso`도 열 수 있다: IR 기반으로 재생되며 Mic Position 컨트롤로 전환된다. 추정 slot은 IR이 없으므로 현재 IR 프리뷰 대상이 아니다(tone profile 기반 EQ 프리뷰는 로드맵 참조).

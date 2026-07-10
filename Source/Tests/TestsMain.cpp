@@ -7,6 +7,7 @@
 #include "Analysis/CabinetMicMatrixEstimator.h"
 #include "Analysis/CabinetToneProfiler.h"
 #include "Analysis/MicColorationProfiles.h"
+#include "Audio/CaptureAudioSource.h"
 #include "Audio/PreviewMicColorProcessor.h"
 #include "Analysis/CalibrationValidator.h"
 #include "Analysis/ModelFidelityEvaluator.h"
@@ -389,6 +390,58 @@ void testModelDataChainCoverage()
           "category fallback works without deviceType");
     check(coverageFor("", hanso::HansoCategory::Unknown).isEmpty(),
           "unknown packages omit chainCoverage");
+}
+
+void testPreviewRigChainCoexistence()
+{
+    hanso::CaptureAudioSource source;
+    source.prepare(48000.0, 256, 2);
+
+    hanso::CompactHansoModel rigModel;
+    rigModel.anchors.push_back({});
+
+    check(source.loadPreviewModel(rigModel), "amp slot loads a model");
+    check(source.loadPreviewPedalModel(rigModel), "pedal slot loads a model");
+
+    // Cabinet slot: minimal cabinet package with one real IR position.
+    hanso::CaptureWizardState wizard(hanso::CaptureType::Cabinet);
+    hanso::HansoPackage package;
+    juce::AudioBuffer<float> ir(1, 512);
+    ir.clear();
+    ir.setSample(0, 0, 1.0f);
+    const auto chunkId = hanso::impulseResponseChunkIdForCabinetPosition("cab-edge");
+    package.setChunk(chunkId, "cabinet-ir", "audio/x-hanso-pcm16",
+                     hanso::HansoAudioChunkCodec::encodePcm16Audio(ir, 48000.0),
+                     48000.0, 1, ir.getNumSamples());
+    wizard.markCabinetSlotImported("cab-edge", chunkId, "edge.wav", hanso::CabinetMicClass::Dynamic, "SM57");
+    if (auto* slot = wizard.findCabinetSlot("cab-edge"))
+        slot->toneProfile = hanso::CabinetToneProfiler::fromImpulseResponse(ir, 48000.0);
+    package.cabinetProfile = wizard.toCabinetProfileVar("Coexist Cab", "SM57", "", "");
+
+    juce::String error;
+    check(source.loadPreviewCabinetPackage(package, error), "cabinet slot loads a package", error);
+    check(source.hasPreviewModel() && source.hasPreviewPedalModel() && source.hasPreviewCabinetPackage(),
+          "pedal, amp, and cabinet slots coexist in the preview rig");
+
+    // End-to-end: the full chain renders audio for a preview sample.
+    juce::AudioBuffer<float> sample(2, 4096);
+    for (int channel = 0; channel < sample.getNumChannels(); ++channel)
+        for (int i = 0; i < sample.getNumSamples(); ++i)
+            sample.setSample(channel, i,
+                             0.25f * std::sin(2.0f * juce::MathConstants<float>::pi * 220.0f
+                                              * static_cast<float>(i) / 48000.0f));
+
+    source.loadPreviewSample(sample);
+    check(source.startPreviewSample(), "preview sample starts");
+
+    juce::AudioBuffer<float> output(2, 256);
+    output.clear();
+    source.process(nullptr, 0, output);
+    check(output.getMagnitude(0, 0, output.getNumSamples()) > 1.0e-4f,
+          "preview rig chain produces audio through all slots",
+          juce::String(output.getMagnitude(0, 0, output.getNumSamples()), 6));
+    source.stopPreviewSample();
+    source.release();
 }
 
 void testSerializerReExportOverwrites()
@@ -1006,6 +1059,7 @@ int main()
     testPreviewMicColorProcessor();
     testPreviewChainPolicy();
     testModelDataChainCoverage();
+    testPreviewRigChainCoexistence();
     testSerializerReExportOverwrites();
     testQualityAnalyzer();
     testCalibrationValidator();
