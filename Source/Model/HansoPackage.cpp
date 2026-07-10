@@ -369,6 +369,38 @@ juce::var HansoPackage::createMetadataVar() const
     modelData->setProperty("dspCoreLocation", "metadata.dspCore");
     modelData->setProperty("dspCoreSchemaVersion", dspCoreSchemaVersion);
     modelData->setProperty("realtimePreviewCompatible", true);
+
+    // Which chain stages the capture itself covers, so consumers know what to
+    // complement around it (e.g. attach a cabinet after an amp-head package,
+    // add nothing after a full rig). deviceType carries the specific capture
+    // kind; category is the fallback for coarser producers.
+    juce::Array<juce::var> chainCoverage;
+    if (metadata.deviceType == "Cabinet" || metadata.category == HansoCategory::Cabinet)
+    {
+        chainCoverage.add("cabinet");
+    }
+    else if (metadata.deviceType == "FullRig" || metadata.category == HansoCategory::Rig)
+    {
+        chainCoverage.add("amp");
+        chainCoverage.add("cabinet");
+    }
+    else if (metadata.deviceType == "PreAmp")
+    {
+        chainCoverage.add("preamp");
+    }
+    else if (metadata.deviceType == "Pedal" || metadata.deviceType == "Effect"
+             || metadata.category == HansoCategory::Pedal)
+    {
+        chainCoverage.add("pedal");
+    }
+    else if (metadata.deviceType == "Amp" || metadata.category == HansoCategory::Amp)
+    {
+        chainCoverage.add("amp");
+    }
+
+    if (! chainCoverage.isEmpty())
+        modelData->setProperty("chainCoverage", chainCoverage);
+
     object->setProperty("modelData", modelData);
 
     object->setProperty("residualDataset", residualDataset.toVar());

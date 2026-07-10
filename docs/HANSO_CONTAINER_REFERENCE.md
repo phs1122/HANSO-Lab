@@ -87,6 +87,10 @@ Cabinet 패키지의 `cabProfile`은 다음 additive 필드를 가질 수 있다
 
 색채 커브 정본은 `Source/Analysis/MicColorationProfiles.*`이며, HANSO TONE의 `hst_fx/CabinetProfiles.h` 파라메트릭 정의를 미러링한다. 어느 한쪽 커브를 바꾸면 같은 변경에서 다른 쪽도 갱신한다 (통합 단계에서 공유 모듈로 단일화 예정).
 
+## `modelData.chainCoverage` (additive)
+
+캡쳐가 체인의 어느 스테이지를 담고 있는지 명시하는 optional 문자열 배열이다. 공식 명세 7.2를 따른다. FullRig=`["amp","cabinet"]`, Amp=`["amp"]`, PreAmp=`["preamp"]`, Pedal/Effect=`["pedal"]`, Cabinet=`["cabinet"]`. 소비자는 이 필드로 무엇을 보완해 렌더링할지 결정하고, 없으면 `deviceType`/`category`로 폴백한다. Tone Preview의 보완 체인 정책(`Source/Preview/PreviewChainPolicy.h`)과 의미가 일치해야 한다.
+
 ## CaptureFirstHybrid 원칙
 
 - 캡쳐 데이터가 존재하면 캡쳐된 실제 소리가 우선이다.

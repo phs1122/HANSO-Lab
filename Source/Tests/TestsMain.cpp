@@ -354,6 +354,43 @@ void testPreviewChainPolicy()
           "unknown package keeps legacy cab-on default");
 }
 
+void testModelDataChainCoverage()
+{
+    const auto coverageFor = [](const juce::String& deviceType, hanso::HansoCategory category)
+    {
+        hanso::HansoPackage package;
+        package.metadata.deviceType = deviceType;
+        package.metadata.category = category;
+        const auto metadataVar = package.createMetadataVar();
+        const auto* object = metadataVar.getDynamicObject();
+        if (object == nullptr)
+            return juce::StringArray();
+
+        const auto modelData = object->getProperty("modelData");
+        const auto* coverage = modelData.getProperty("chainCoverage", {}).getArray();
+        juce::StringArray names;
+        if (coverage != nullptr)
+            for (const auto& entry : *coverage)
+                names.add(entry.toString());
+        return names;
+    };
+
+    check(coverageFor("FullRig", hanso::HansoCategory::Rig) == juce::StringArray { "amp", "cabinet" },
+          "full rig covers amp and cabinet");
+    check(coverageFor("Amp", hanso::HansoCategory::Amp) == juce::StringArray { "amp" },
+          "amp head covers amp only");
+    check(coverageFor("PreAmp", hanso::HansoCategory::Amp) == juce::StringArray { "preamp" },
+          "preamp covers preamp only");
+    check(coverageFor("Pedal", hanso::HansoCategory::Pedal) == juce::StringArray { "pedal" },
+          "pedal covers pedal only");
+    check(coverageFor("Cabinet", hanso::HansoCategory::Cabinet) == juce::StringArray { "cabinet" },
+          "cabinet covers cabinet only");
+    check(coverageFor("", hanso::HansoCategory::Rig) == juce::StringArray { "amp", "cabinet" },
+          "category fallback works without deviceType");
+    check(coverageFor("", hanso::HansoCategory::Unknown).isEmpty(),
+          "unknown packages omit chainCoverage");
+}
+
 void testSerializerReExportOverwrites()
 {
     const auto file = juce::File::getSpecialLocation(juce::File::tempDirectory)
@@ -968,6 +1005,7 @@ int main()
     testCabinetCaptureMicMetadata();
     testPreviewMicColorProcessor();
     testPreviewChainPolicy();
+    testModelDataChainCoverage();
     testSerializerReExportOverwrites();
     testQualityAnalyzer();
     testCalibrationValidator();
