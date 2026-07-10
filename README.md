@@ -131,8 +131,12 @@ Export 시 `cabProfile.micMatrix`에 **모든 (마이크 클래스 × 마이크 
 Tone Preview는 **샘플 기반** 프리뷰다. 피드백 루프 위험 때문에 라이브 입력 프리뷰는 지원하지 않는다.
 
 ```
-샘플 재생 → Compact HANSO Model → (Cabinet Preview Filter) → (Normalization) → 볼륨 → 출력
+샘플 재생 → Compact HANSO Model → (보완 Cabinet: Standard EQ 또는 Custom .hanso IR) → (Normalization) → 볼륨 → 출력
 ```
+
+### 보완 체인 (complement chain)
+
+프리뷰는 캡쳐 타입에 따라 부족한 체인 스테이지를 자동으로 보완한다: Amp Head/PreAmp는 보완 캐비넷을 붙이고, Full Rig(amp+cab 포함)와 Pedal(FRFR 기준)·Cabinet은 무착색으로 재생한다. 패널 상단의 **체인 스트립**이 현재 체인을 보여주며, 실선 블록은 캡쳐된 패키지, 점선 블록은 프리뷰 전용 보완이다. 보완 캐비넷 소스는 `Cab:` 콤보로 내장 Standard EQ 또는 사용자 캐비넷 `.hanso`(IR 컨볼루션) 중 선택할 수 있다(세션 스코프). 보완 설정은 `.hanso`에 기록되지 않으며, 패키지는 자신이 담는 스테이지를 `modelData.chainCoverage`로 명시한다.
 
 - Amp 패키지: Gain 파라미터로 anchor 사이를 보간하며 audition한다.
 - Cabinet `.hanso`도 열 수 있다: IR 기반으로 재생되며 Mic Position 컨트롤로 전환된다. 추정 slot은 IR이 없으므로 현재 IR 프리뷰 대상이 아니다(tone profile 기반 EQ 프리뷰는 로드맵 참조).
