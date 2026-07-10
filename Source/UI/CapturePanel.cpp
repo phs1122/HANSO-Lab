@@ -10,12 +10,39 @@ namespace hanso
 {
 namespace
 {
+// Capture-type dropdown item ids (stable, not the display order).
+int captureTypeBoxId(CaptureType type)
+{
+    switch (type)
+    {
+        case CaptureType::Cabinet: return 2;
+        case CaptureType::Pedal:
+        case CaptureType::Effect:  return 3;
+        case CaptureType::FullRig: return 5;
+        case CaptureType::PreAmp:  return 7;
+        case CaptureType::Amp:     return 1;
+    }
+    return 1;
+}
+
+CaptureType captureTypeFromBoxId(int id)
+{
+    switch (id)
+    {
+        case 2: return CaptureType::Cabinet;
+        case 3: return CaptureType::Pedal;
+        case 5: return CaptureType::FullRig;
+        case 7: return CaptureType::PreAmp;
+        default: return CaptureType::Amp;
+    }
+}
+
 juce::String modeDescription(CaptureMode mode)
 {
     if (mode == CaptureMode::Easy)
-        return utf8("간편 캡쳐\nPhones Out → 일반 기타 케이블 → 장비 Input\n리앰프 박스가 없는 사용자를 위한 방식입니다.\n정확도는 정식 캡쳐보다 낮을 수 있으며, 앱은 Left 채널만 출력하고 Right 채널은 무음 처리합니다.");
+        return utf8("간편 캡쳐\nPhones Out → 일반 기타 케이블 → 장비 Input\n리앰프 박스가 없는 사용자를 위한 방식입니다.\n정확도는 일반 캡쳐보다 낮을 수 있으며, 앱은 Left 채널만 출력하고 Right 채널은 무음 처리합니다.");
 
-    return utf8("정식 캡쳐\nLine Out → 리앰프 박스 → 장비 Input\n가장 정확한 방식입니다.");
+    return utf8("일반 캡쳐\nLine Out → 리앰프 박스 → 장비 Input\n가장 정확한 방식입니다.");
 }
 
 juce::String workflowDescription(const CaptureWizardState& wizard)
@@ -131,26 +158,26 @@ CapturePanel::CapturePanel(ApplicationState& state, CaptureEngine& captureEngine
           applyCaptureSettings(startChannel, channelCount);
       })
 {
-    styleSectionTitle(title, "Capture Wizard");
+    // "Capture Wizard" 타이틀 제거 (앱 타이틀로 충분). Stage 2에서 이 자리를
+    // 캡쳐 대상 + 진행 단계 맥락 헤더로 대체 예정.
+    styleSectionTitle(title, "");
     addAndMakeVisible(title);
 
     captureTypeLabel.setText("Capture Type", juce::dontSendNotification);
     captureTypeLabel.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(captureTypeLabel);
 
-    captureTypeBox.addItem("Amp", 1);
-    captureTypeBox.addItem("Cabinet", 2);
-    captureTypeBox.addItem("Pedal", 3);
-    captureTypeBox.addItem("Effect", 4);
     captureTypeBox.addItem("Full Rig", 5);
-    captureTypeBox.setItemEnabled(3, false);
-    captureTypeBox.setItemEnabled(4, false);
-    captureTypeBox.setItemEnabled(5, false);
-    captureTypeBox.setSelectedId(1, juce::dontSendNotification);
+    captureTypeBox.addItem("Amp Head", 1);
+    captureTypeBox.addItem(utf8("Pedal / Effect"), 3);
+    captureTypeBox.addItem("Pre Amp Only", 7);
+    captureTypeBox.addItem("Cabinet", 2);
+    captureTypeBox.setItemEnabled(3, false);   // Pedal / Effect not implemented yet
+    captureTypeBox.setSelectedId(captureTypeBoxId(CaptureType::FullRig), juce::dontSendNotification);
     captureTypeBox.onChange = [this] { updateCaptureTypeFromSelector(); };
     addAndMakeVisible(captureTypeBox);
 
-    standardModeButton.setButtonText(utf8("정식 캡쳐"));
+    standardModeButton.setButtonText(utf8("일반 캡쳐"));
     easyModeButton.setButtonText(utf8("간편 캡쳐"));
     standardModeButton.setClickingTogglesState(true);
     easyModeButton.setClickingTogglesState(true);
@@ -181,6 +208,22 @@ CapturePanel::CapturePanel(ApplicationState& state, CaptureEngine& captureEngine
     safetyWarningLabel.setJustificationType(juce::Justification::topLeft);
     safetyWarningLabel.setText(utf8("앰프의 Speaker Out을 오디오 인터페이스 Input에 직접 연결하지 마세요.\n반드시 스피커 캐비넷+마이크 또는 적절한 로드박스를 사용해야 합니다."), juce::dontSendNotification);
     addAndMakeVisible(safetyWarningLabel);
+
+    // Cabinet workflow only: the mic used for direct slot captures. Imported
+    // IR slots get their own metadata from the import dialog instead.
+    captureMicLabel.setText(utf8("캡쳐 마이크"), juce::dontSendNotification);
+    addAndMakeVisible(captureMicLabel);
+    captureMicClassBox.addItem("Unknown", 1);
+    captureMicClassBox.addItem("Dynamic", 2);
+    captureMicClassBox.addItem("Ribbon", 3);
+    captureMicClassBox.addItem("Condenser", 4);
+    captureMicClassBox.setSelectedId(1, juce::dontSendNotification);
+    captureMicClassBox.onChange = [this] { applyCaptureMicFromControls(); };
+    addAndMakeVisible(captureMicClassBox);
+    captureMicModelEditor.setTextToShowWhenEmpty(utf8("마이크 모델명 (선택)"), juce::Colours::grey);
+    captureMicModelEditor.onFocusLost = [this] { applyCaptureMicFromControls(); };
+    captureMicModelEditor.onReturnKey = [this] { applyCaptureMicFromControls(); };
+    addAndMakeVisible(captureMicModelEditor);
 
     rebuildStepRows();
 
@@ -243,9 +286,9 @@ CapturePanel::CapturePanel(ApplicationState& state, CaptureEngine& captureEngine
     calibrationOutputMeterLabel.setJustificationType(juce::Justification::topLeft);
     calibrationInputMeterLabel.setJustificationType(juce::Justification::topLeft);
     calibrationMeterTitle.setColour(juce::Label::textColourId, juce::Colours::lightblue);
-    calibrationOutputSliderLabel.setText(utf8("앱 출력 레벨 (캡쳐 공통 · 목표 -42 ~ -24 dBFS)"), juce::dontSendNotification);
+    calibrationOutputSliderLabel.setText(utf8("앱 출력 레벨 (Easy는 calibration 통과 후 최대치까지 · Standard는 리앰프 박스 전제로 -12 dBFS 제한)"), juce::dontSendNotification);
     calibrationOutputSliderLabel.setJustificationType(juce::Justification::centredLeft);
-    calibrationOutputSlider.setRange(-50.0, -18.0, 0.5);
+    calibrationOutputSlider.setRange(-50.0, -3.0, 0.5);
     calibrationOutputSlider.setValue(capture.calibrationOutputDb(), juce::dontSendNotification);
     calibrationOutputSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 72, 22);
     calibrationOutputSlider.setTextValueSuffix(" dBFS");
@@ -408,10 +451,24 @@ void CapturePanel::resized()
     const auto infoColumnWidth = juce::jmin(460, columns.getWidth());
     auto centre = columns.removeFromRight(infoColumnWidth);
 
+    // Card backgrounds (drawn in paint(), behind the column content).
+    leftCardBounds = left.expanded(6, 8);
+    rightCardBounds = centre.expanded(6, 8);
+
     connectionGuideLabel.setBounds(left.removeFromTop(120));
     left.removeFromTop(10);
     safetyWarningLabel.setBounds(left.removeFromTop(82));
     left.removeFromTop(12);
+
+    if (appState.captureWizard().captureType == CaptureType::Cabinet)
+    {
+        auto micRow = left.removeFromTop(30);
+        captureMicLabel.setBounds(micRow.removeFromLeft(92));
+        captureMicClassBox.setBounds(micRow.removeFromLeft(130).reduced(0, 2));
+        micRow.removeFromLeft(8);
+        captureMicModelEditor.setBounds(micRow.removeFromLeft(200).reduced(0, 2));
+        left.removeFromTop(8);
+    }
 
     for (int i = 0; i < stepButtons.size(); ++i)
     {
@@ -520,6 +577,21 @@ void CapturePanel::resized()
     busyProgress.setBounds(busyArea.removeFromTop(18));
 }
 
+void CapturePanel::paint(juce::Graphics& g)
+{
+    const auto card = juce::Colour::fromRGB(31, 33, 36);
+    const auto border = juce::Colour::fromRGB(58, 62, 66);
+    for (const auto& r : { leftCardBounds, rightCardBounds })
+    {
+        if (r.isEmpty())
+            continue;
+        g.setColour(card);
+        g.fillRoundedRectangle(r.toFloat(), 12.0f);
+        g.setColour(border.withAlpha(0.55f));
+        g.drawRoundedRectangle(r.toFloat().reduced(0.5f), 12.0f, 1.0f);
+    }
+}
+
 void CapturePanel::paintOverChildren(juce::Graphics& g)
 {
     if (! layoutDebugEnabled)
@@ -610,8 +682,7 @@ void CapturePanel::applyCaptureSettings(int startChannel, int channelCount)
 
 void CapturePanel::updateCaptureTypeFromSelector()
 {
-    const auto selectedType = captureTypeBox.getSelectedId() == 2 ? CaptureType::Cabinet
-                                                                  : CaptureType::Amp;
+    const auto selectedType = captureTypeFromBoxId(captureTypeBox.getSelectedId());
     if (selectedType == appState.captureWizard().captureType)
         return;
 
@@ -637,9 +708,19 @@ void CapturePanel::updateCaptureTypeFromSelector()
             return;
         }
 
-        captureTypeBox.setSelectedId(appState.captureWizard().captureType == CaptureType::Cabinet ? 2 : 1,
-                                     juce::dontSendNotification);
+        const auto curType = appState.captureWizard().captureType;
+        captureTypeBox.setSelectedId(captureTypeBoxId(curType), juce::dontSendNotification);
     });
+}
+
+void CapturePanel::applyOnboardingSelection(CaptureType type, CaptureMode mode)
+{
+    // Set the mode radios first: applyCaptureType() calls updateModeFromButtons()
+    // which reads them. It also resets the wizard, so the mode lock is clear.
+    easyModeButton.setToggleState(mode == CaptureMode::Easy, juce::dontSendNotification);
+    standardModeButton.setToggleState(mode == CaptureMode::Standard, juce::dontSendNotification);
+    captureTypeBox.setSelectedId(captureTypeBoxId(type), juce::dontSendNotification);
+    applyCaptureType(type);
 }
 
 void CapturePanel::applyCaptureType(CaptureType type)
@@ -668,8 +749,41 @@ void CapturePanel::applyCaptureType(CaptureType type)
 void CapturePanel::syncWizardUi()
 {
     const auto& wizard = appState.captureWizard();
-    captureTypeBox.setSelectedId(wizard.captureType == CaptureType::Cabinet ? 2 : 1, juce::dontSendNotification);
+    captureTypeBox.setSelectedId(captureTypeBoxId(wizard.captureType), juce::dontSendNotification);
     connectionGuideLabel.setText(workflowDescription(wizard) + "\n\n" + cableGuideText(wizard.cableGuide), juce::dontSendNotification);
+
+    {
+        const auto isCabinet = wizard.captureType == CaptureType::Cabinet;
+        captureMicLabel.setVisible(isCabinet);
+        captureMicClassBox.setVisible(isCabinet);
+        captureMicModelEditor.setVisible(isCabinet);
+
+        const auto boxId = wizard.cabinetCaptureMicClass == CabinetMicClass::Dynamic ? 2
+                         : wizard.cabinetCaptureMicClass == CabinetMicClass::Ribbon ? 3
+                         : wizard.cabinetCaptureMicClass == CabinetMicClass::Condenser ? 4
+                         : 1;
+        captureMicClassBox.setSelectedId(boxId, juce::dontSendNotification);
+        if (! captureMicModelEditor.hasKeyboardFocus(true))
+            captureMicModelEditor.setText(wizard.cabinetCaptureMicModelName, false);
+    }
+
+    // Contextual header (replaces the removed "Capture Wizard" title):
+    // 모드 · 캡쳐 대상 · 진행 단계.
+    {
+        const auto typeLabel = wizard.captureType == CaptureType::Cabinet ? juce::String("Cabinet")
+                             : wizard.captureType == CaptureType::FullRig ? juce::String("Full Rig")
+                             : wizard.captureType == CaptureType::PreAmp ? juce::String("Pre Amp")
+                             : wizard.captureType == CaptureType::Pedal || wizard.captureType == CaptureType::Effect ? juce::String("Pedal / Effect")
+                             : juce::String("Amp Head");
+        auto passed = 0;
+        for (const auto& s : wizard.recipe.steps)
+            if (s.status == CaptureStepStatus::Passed)
+                ++passed;
+        title.setText(toKoreanString(wizard.mode) + "   ·   " + typeLabel + "   ·   "
+                          + juce::String(passed) + "/" + juce::String((int) wizard.recipe.steps.size())
+                          + utf8(" 단계"),
+                      juce::dontSendNotification);
+    }
 
     for (int i = 0; i < static_cast<int>(wizard.recipe.steps.size()) && i < stepIcons.size(); ++i)
     {
@@ -736,13 +850,25 @@ void CapturePanel::syncWizardUi()
         qualityLabel.setText(qualityText(wizard.findResult(step->stepId)), juce::dontSendNotification);
         const auto showLevelMeters = step->stepId != "setup";
         const auto showCalibrationControls = step->stepId == "calibration";
+        // Easy: app output follows the slider (only gain lever). Standard: output
+        // is fixed and driven by the reamp box, so hide both the output slider and
+        // the output meter entirely — the user cannot act on them, only the return
+        // matters there.
+        const auto easyMode = wizard.mode == CaptureMode::Easy;
+        const auto showOutputSlider = showCalibrationControls && easyMode;
+        const auto showOutputMeter = showLevelMeters && easyMode;
         const auto visibilityChanged = calibrationInputMeter.isVisible() != showLevelMeters
-                                    || calibrationOutputSlider.isVisible() != showCalibrationControls;
+                                    || calibrationOutputSlider.isVisible() != showOutputSlider
+                                    || calibrationOutputMeter.isVisible() != showOutputMeter;
         calibrationMeterTitle.setVisible(showLevelMeters);
         calibrationOutputSliderLabel.setVisible(showCalibrationControls);
-        calibrationOutputSlider.setVisible(showCalibrationControls);
-        calibrationOutputMeter.setVisible(showLevelMeters);
-        calibrationOutputMeterLabel.setVisible(showLevelMeters);
+        calibrationOutputSliderLabel.setText(easyMode
+            ? utf8("앱 출력 레벨 (슬라이더로 조절 · 리턴 클리핑만 주의)")
+            : utf8("앱 출력 고정 -12 dBFS · 드라이브는 리앰프 박스로 · 리턴만 확인하면 됩니다"),
+            juce::dontSendNotification);
+        calibrationOutputSlider.setVisible(showOutputSlider);
+        calibrationOutputMeter.setVisible(showOutputMeter);
+        calibrationOutputMeterLabel.setVisible(showOutputMeter);
         calibrationInputMeter.setVisible(showLevelMeters);
         calibrationInputMeterLabel.setVisible(showLevelMeters);
 
@@ -754,6 +880,17 @@ void CapturePanel::syncWizardUi()
                           ? (wizard.hasWarnings() ? utf8("Export ready with warnings: 경고가 있는 캡쳐가 있습니다.") : utf8("Export ready: 모든 필수 단계가 완료되었습니다."))
                           : wizard.exportDisabledReason();
     exportReadinessLabel.setText(exportText, juce::dontSendNotification);
+
+    // Capture mode (Easy/Standard) describes the physical rig (reamp box or not),
+    // which cannot change by a click mid-session. Keep the buttons in sync with
+    // the wizard and lock them once calibration has started or passed; changing
+    // the mode then requires "새 캡쳐" (full reset), which invalidates calibration.
+    const bool modeLocked = capture.isCalibrationMonitorRunning() || wizard.calibrationPassed;
+    easyModeButton.setToggleState(wizard.mode == CaptureMode::Easy, juce::dontSendNotification);
+    standardModeButton.setToggleState(wizard.mode == CaptureMode::Standard, juce::dontSendNotification);
+    easyModeButton.setEnabled(! modeLocked);
+    standardModeButton.setEnabled(! modeLocked);
+
     updateStepActions();
     updateCompletionActions();
 }
@@ -809,7 +946,20 @@ void CapturePanel::handleStepButtonClicked(const juce::String& stepId)
 void CapturePanel::updateModeFromButtons()
 {
     auto& wizard = appState.captureWizard();
-    wizard.mode = easyModeButton.getToggleState() ? CaptureMode::Easy : CaptureMode::Standard;
+    const bool modeLocked = capture.isCalibrationMonitorRunning() || wizard.calibrationPassed;
+    const auto requested = easyModeButton.getToggleState() ? CaptureMode::Easy : CaptureMode::Standard;
+
+    // Defense in depth: the buttons are disabled while locked, but if a change
+    // still reaches here, refuse it and re-sync so calibration stays valid for
+    // the rig it was measured on.
+    if (modeLocked && requested != wizard.mode)
+    {
+        appState.appendLog(utf8("캡쳐 모드는 calibration 시작 후 변경할 수 없습니다. 바꾸려면 '새 캡쳐'로 초기화하세요."));
+        syncWizardUi();
+        return;
+    }
+
+    wizard.mode = requested;
     appState.currentPackage().captureWorkflow = wizard.toMetadataVar();
     syncWizardUi();
 }
@@ -838,19 +988,20 @@ void CapturePanel::updateCalibrationMeter()
     else
         inputState = utf8("안전 범위");
 
+    // Output has no high-side limit: driving hard is desirable (esp. for weak
+    // sources) and harmless since the app controls its own digital output. The
+    // only real risk lives on the return side, so only flag a too-weak output.
     juce::String outputState;
     if (outputDb < -42.0f)
         outputState = utf8("낮음: 앱 테스트 신호가 너무 작습니다.");
-    else if (outputDb > -24.0f)
-        outputState = utf8("높음: 앱 테스트 신호가 너무 큽니다.");
     else
-        outputState = utf8("안전 범위");
+        outputState = utf8("정상");
 
     calibrationOutputMeterLabel.setText(utf8("Output: ")
                                         + juce::String(outputDb, 1)
-                                        + " dBFS / Target "
-                                        + juce::String(capture.calibrationOutputDb(), 1)
-                                        + " dBFS\nTarget -42 to -24 / "
+                                        + utf8(" dBFS / 실효 ")
+                                        + juce::String(capture.effectiveOutputDb(), 1)
+                                        + utf8(" dBFS\n리턴이 클리핑 안 하도록 입력게인 조절 / ")
                                         + outputState,
                                         juce::dontSendNotification);
 
@@ -915,13 +1066,98 @@ void CapturePanel::showImportIrChooser(const juce::String& stepId)
         {
             const auto file = chooser.getResult();
             if (file != juce::File())
-            {
-                capture.importCabinetIrForStep(stepId, file);
-                syncWizardUi();
-            }
+                showImportIrMicMetadataDialog(stepId, file);
 
             irImportChooser = nullptr;
         });
+}
+
+void CapturePanel::showImportIrMicMetadataDialog(const juce::String& stepId, const juce::File& file)
+{
+    irImportMetadataDialog = std::make_unique<juce::AlertWindow>(
+        "Import IR Metadata",
+        utf8("이 IR을 녹음한 마이크 정보를 입력하세요.\n"
+             "마이크 클래스는 나머지 마이크 종류/위치 tone 추정의 기준이 됩니다.\n"
+             "클래스를 Unknown으로 두고 모델명만 입력하면 클래스를 자동 추정합니다."),
+        juce::MessageBoxIconType::QuestionIcon, this);
+
+    irImportMetadataDialog->addComboBox("micClass",
+                                        { "Unknown", "Dynamic", "Ribbon", "Condenser" },
+                                        utf8("마이크 클래스"));
+    if (auto* combo = irImportMetadataDialog->getComboBoxComponent("micClass"))
+        combo->setSelectedItemIndex(0, juce::dontSendNotification);
+    irImportMetadataDialog->addTextEditor("micModel", {}, utf8("마이크 모델명 (선택)"));
+    irImportMetadataDialog->addButton("Import", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    irImportMetadataDialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+    irImportMetadataDialog->enterModalState(true,
+        juce::ModalCallbackFunction::create([this, stepId, file](int result)
+        {
+            if (irImportMetadataDialog == nullptr)
+                return;
+
+            if (result == 1)
+            {
+                const auto micModelName = irImportMetadataDialog->getTextEditorContents("micModel").trim();
+                auto micClass = CabinetMicClass::Unknown;
+                if (auto* combo = irImportMetadataDialog->getComboBoxComponent("micClass"))
+                {
+                    switch (combo->getSelectedItemIndex())
+                    {
+                        case 1: micClass = CabinetMicClass::Dynamic; break;
+                        case 2: micClass = CabinetMicClass::Ribbon; break;
+                        case 3: micClass = CabinetMicClass::Condenser; break;
+                        default: break;
+                    }
+                }
+
+                if (micClass == CabinetMicClass::Unknown)
+                    micClass = suggestMicClassForModelName(micModelName);
+
+                capture.importCabinetIrForStep(stepId, file, micClass, micModelName);
+                syncWizardUi();
+            }
+
+            irImportMetadataDialog = nullptr;
+        }),
+        false);
+}
+
+void CapturePanel::applyCaptureMicFromControls()
+{
+    auto& wizard = appState.captureWizard();
+    if (wizard.captureType != CaptureType::Cabinet)
+        return;
+
+    const auto micModelName = captureMicModelEditor.getText().trim();
+    auto micClass = CabinetMicClass::Unknown;
+    switch (captureMicClassBox.getSelectedId())
+    {
+        case 2: micClass = CabinetMicClass::Dynamic; break;
+        case 3: micClass = CabinetMicClass::Ribbon; break;
+        case 4: micClass = CabinetMicClass::Condenser; break;
+        default: break;
+    }
+
+    if (micClass == CabinetMicClass::Unknown && micModelName.isNotEmpty())
+    {
+        micClass = suggestMicClassForModelName(micModelName);
+        if (micClass != CabinetMicClass::Unknown)
+        {
+            const auto boxId = micClass == CabinetMicClass::Dynamic ? 2
+                             : micClass == CabinetMicClass::Ribbon ? 3
+                             : 4;
+            captureMicClassBox.setSelectedId(boxId, juce::dontSendNotification);
+        }
+    }
+
+    if (micClass == wizard.cabinetCaptureMicClass
+        && micModelName == wizard.cabinetCaptureMicModelName)
+        return;
+
+    wizard.applyCabinetCaptureMic(micClass, micModelName);
+    appState.currentPackage().captureWorkflow = wizard.toMetadataVar();
+    syncWizardUi();
 }
 
 void CapturePanel::showAssetExportDialog()

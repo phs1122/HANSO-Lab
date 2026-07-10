@@ -7,22 +7,39 @@
 #include "Capture/CabinetIrImporter.h"
 #include "Capture/CabinetMessages.h"
 #include "Capture/CaptureStepUtils.h"
+#include "Preview/PreviewSampleLibrary.h"
 #include "Serialization/HansoAudioChunkCodec.h"
 
 namespace hanso
 {
 namespace
 {
+// Return-side window is the real safety guard: keep the captured return below
+// clipping (-8 dBFS ceiling = 8 dB headroom) and above the noise floor.
 constexpr float calibrationInputMinDb = -36.0f;
 constexpr float calibrationInputMaxDb = -8.0f;
+// Output-side window is permissive on the high end: the app controls its own
+// digital output and the real risk lives on the return side (above). Calibration
+// runs at the same effective level as the captures (modeAdjustedOutputDb), so
+// this window must admit the hottest capture case; the lower bound still catches
+// a dead or too-weak output.
 constexpr float calibrationOutputMinDb = -42.0f;
-constexpr float calibrationOutputMaxDb = -24.0f;
+constexpr float calibrationOutputMaxDb = 0.0f;
+// Standard mode fixed output level. A reamp box supplies the analog gain, so
+// the app output is held here (no slider) and the user drives via the reamp box.
+constexpr float standardOutputMaxDb = -12.0f;
 constexpr float calibrationRequiredSnrDb = 12.0f;
 constexpr float calibrationRequiredToneDominanceDb = 6.0f;
 constexpr float calibrationSilentLoopbackThresholdDb = -50.0f;
 constexpr double calibrationSilentMeasureSeconds = 1.0;
 constexpr double calibrationRecentWindowSeconds = 0.75;
 constexpr double calibrationLoopbackGraceMs = 200.0;
+// Mute-drop identity cycle. Only runs while the Goertzel identity check is
+// failing, so the clean-signal path keeps its 3-second completion time.
+constexpr double calibrationMuteWindowMs = 300.0;
+constexpr double calibrationMuteRetryIntervalMs = 2500.0;
+constexpr double calibrationMuteSettleMs = 100.0;
+constexpr double calibrationMuteDropValidityMs = 15000.0;
 
 double dbToPower(float db) noexcept
 {
@@ -49,14 +66,16 @@ juce::AudioBuffer<float> makeSilentCalibrationSignal(double sampleRate)
 }
 
 juce::AudioBuffer<float> makeProbeCalibrationSignal(const TestSignalGenerator& generator,
-                                                    double sampleRate,
-                                                    float outputDbfs)
+                                                    double sampleRate)
 {
     TestSignalSpec spec;
     spec.type = TestSignalType::MultiSine;
     spec.sampleRate = sampleRate;
     spec.durationSeconds = 1.0;
-    spec.amplitude = juce::Decibels::decibelsToGain(outputDbfs);
+    // Unit reference amplitude; the actual output level is applied downstream as
+    // a smoothed gain (CaptureAudioSource::setCalibrationOutputGain) so live
+    // slider changes ramp instead of stepping.
+    spec.amplitude = 1.0f;
     return generator.generate(spec);
 }
 
@@ -71,6 +90,84 @@ CalibrationValidationConfig calibrationValidationConfig() noexcept
     config.requiredSnrDb = calibrationRequiredSnrDb;
     config.requiredToneDominanceDb = calibrationRequiredToneDominanceDb;
     return config;
+}
+
+// Capture-path resampler. The protected Lagrange resampling inside
+// TonePreviewPanel stays untouched; this is an independent helper.
+juce::AudioBuffer<float> resampleMonoToRate(const juce::AudioBuffer<float>& input,
+                                            double inputRate,
+                                            double outputRate)
+{
+    if (input.getNumSamples() <= 0 || inputRate <= 0.0 || outputRate <= 0.0
+        || std::abs(inputRate - outputRate) < 0.5)
+        return input;
+
+    const auto ratio = inputRate / outputRate;
+    const auto outputSamples = juce::jmax(1, static_cast<int>(input.getNumSamples() / ratio));
+    juce::AudioBuffer<float> output(1, outputSamples);
+    juce::LagrangeInterpolator interpolator;
+    interpolator.process(ratio, input.getReadPointer(0), output.getWritePointer(0), outputSamples);
+    return output;
+}
+
+struct InjectionSample
+{
+    juce::String id;
+    juce::AudioBuffer<float> buffer;
+};
+
+// Loads up to two preview samples (alphabetical), mono-summed, resampled to
+// the session rate and peak-normalized to the sweep amplitude so the device
+// sees the same operating point for sweep and samples.
+std::vector<InjectionSample> loadInjectionSamples(double sampleRate, float amplitude)
+{
+    std::vector<InjectionSample> samples;
+    auto files = PreviewSampleLibrary::listSampleFiles();
+    std::sort(files.begin(), files.end(),
+              [](const juce::File& a, const juce::File& b)
+              {
+                  return a.getFileName().compareIgnoreCase(b.getFileName()) < 0;
+              });
+
+    juce::AudioFormatManager formatManager;
+    formatManager.registerBasicFormats();
+
+    for (const auto& file : files)
+    {
+        if (samples.size() >= 2)
+            break;
+
+        std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
+        if (reader == nullptr || reader->lengthInSamples <= 0 || reader->numChannels == 0)
+            continue;
+
+        const auto readSamples = static_cast<int>(juce::jmin(reader->lengthInSamples,
+                                                             static_cast<juce::int64>(reader->sampleRate * 6.0)));
+        juce::AudioBuffer<float> raw(static_cast<int>(reader->numChannels), readSamples);
+        if (! reader->read(&raw, 0, readSamples, 0, true, true))
+            continue;
+
+        juce::AudioBuffer<float> mono(1, readSamples);
+        mono.clear();
+        const auto channelGain = 1.0f / static_cast<float>(raw.getNumChannels());
+        for (int channel = 0; channel < raw.getNumChannels(); ++channel)
+            mono.addFrom(0, 0, raw, channel, 0, readSamples, channelGain);
+
+        auto resampled = resampleMonoToRate(mono, reader->sampleRate, sampleRate);
+        const auto peak = resampled.getMagnitude(0, 0, resampled.getNumSamples());
+        if (peak <= 1.0e-6f)
+            continue;
+
+        // Safety: normalized to the calibrated sweep amplitude, never above it.
+        resampled.applyGain(amplitude / peak);
+
+        InjectionSample sample;
+        sample.id = sanitizePreviewSampleId(file.getFileNameWithoutExtension());
+        sample.buffer = std::move(resampled);
+        samples.push_back(std::move(sample));
+    }
+
+    return samples;
 }
 
 bool isCabinetWorkflow(const CaptureWizardState& wizard) noexcept
@@ -95,7 +192,7 @@ void unlockPostCalibrationSteps(CaptureWizardState& wizard)
         return;
     }
 
-    if (auto* next = wizard.findStep("gain-010"))
+    if (auto* next = wizard.findStep("gain-100"))
         if (next->status == CaptureStepStatus::NotStarted)
             next->status = CaptureStepStatus::Ready;
 }
@@ -117,8 +214,10 @@ CaptureQualityTarget qualityTargetForStep(const CaptureStep& step)
     if (step.anchor.normalizedValue <= 0.15f)
         return { -72.0f, -12.0f, "Gain 10%", 18.0f, true };
 
+    // Hi-gain devices amplify their own idle noise; a 30 dB SNR demand is not
+    // physically attainable there, so the gain-100 anchor accepts 20 dB.
     if (step.anchor.normalizedValue >= 0.85f)
-        return { -36.0f, -3.0f, "Gain 100%" };
+        return { -36.0f, -3.0f, "Gain 100%", 20.0f };
 
     return { -42.0f, -8.0f, "Gain 50%" };
 }
@@ -291,13 +390,11 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
 
     const auto isCalibration = stepId == "calibration";
 
-    // Capture output follows the level dialed in during Calibration, so the
-    // level you verify as safe is exactly the level the real captures use.
-    // Easy mode keeps its hard safety ceiling on top of that.
-    const auto calibratedAmplitude = juce::Decibels::decibelsToGain(userCalibrationOutputDb);
-    const auto amplitude = wizard.mode == CaptureMode::Easy
-                         ? easyPolicy.limitAmplitude(calibratedAmplitude)
-                         : calibratedAmplitude;
+    // Output level is mode-adjusted (see modeAdjustedOutputDb): Easy allows the
+    // full dialed level once calibration has verified the path (its only gain
+    // lever), Standard stays conservative because a reamp box provides the gain.
+    // Both calibration and captures use this same effective level.
+    const auto amplitude = juce::Decibels::decibelsToGain(modeAdjustedOutputDb());
 
     TestSignalSpec spec;
     spec.type = TestSignalType::LogSineSweep;
@@ -305,13 +402,71 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
     spec.durationSeconds = isCalibration ? 2.0 : 5.0;
     spec.amplitude = amplitude;
 
-    auto drySignal = generator.generate(spec);
-    audio.captureSource().loadCaptureSignal(drySignal);
-    const auto captureChannels = audio.captureSource().captureChannelCount();
-    session.createNew(audio.currentSampleRate(), captureChannels, spec, std::move(drySignal));
+    auto sweepSignal = generator.generate(spec);
+    const auto sweepSamples = sweepSignal.getNumSamples();
 
     auto& package = appState.currentPackage();
     configurePackageForCaptureType(package, wizard);
+
+    // Sample injection: gain anchors also play the preview samples through
+    // the device so the extracted model can be verified and refined against
+    // real program material. Samples are peak-normalized to the same
+    // calibrated amplitude as the sweep — never louder.
+    activeSampleSegments.clear();
+    activeSweepSamples = 0;
+    juce::AudioBuffer<float> outputSignal;
+    if (step->anchor.parameterKey == "gain")
+    {
+        auto injection = loadInjectionSamples(spec.sampleRate, spec.amplitude);
+        if (! injection.empty())
+        {
+            const auto gapSamples = juce::jmax(1, static_cast<int>(spec.sampleRate * 0.5));
+            auto totalSamples = sweepSamples + gapSamples;
+            for (const auto& sample : injection)
+                totalSamples += gapSamples + sample.buffer.getNumSamples();
+
+            outputSignal.setSize(1, totalSamples);
+            outputSignal.clear();
+            outputSignal.copyFrom(0, 0, sweepSignal, 0, 0, sweepSamples);
+
+            auto cursor = sweepSamples;
+            for (auto& sample : injection)
+            {
+                cursor += gapSamples;
+                activeSampleSegments.push_back({ sample.id, cursor, sample.buffer.getNumSamples() });
+                outputSignal.copyFrom(0, cursor, sample.buffer, 0, 0, sample.buffer.getNumSamples());
+                cursor += sample.buffer.getNumSamples();
+
+                const auto sharedId = "capture/shared/sample-" + sample.id + ".pcm16";
+                if (package.findChunk(sharedId) == nullptr)
+                    setPcm16AudioChunk(package, sharedId, "drySample", sample.buffer, spec.sampleRate);
+            }
+
+            activeSweepSamples = sweepSamples;
+            appState.appendLog("Sample injection: " + juce::String(static_cast<int>(injection.size()))
+                               + " preview sample(s) will play after the sweep.");
+        }
+        else
+        {
+            appState.appendLog("Sample injection skipped: no preview samples imported (add files in Tone Preview).");
+        }
+    }
+
+    if (outputSignal.getNumSamples() == 0)
+        outputSignal.makeCopyOf(sweepSignal, true);
+
+    // Safety note: the generated output still uses the calibrated dBFS level
+    // plus Easy-mode limiting above. The per-anchor dry reference stays
+    // sweep-only so model extraction compares each return against exactly the
+    // sweep that was sent — the sample segments live in their own chunks.
+    const auto dryChunkId = dryChunkIdForStep(*step);
+    if (! dryChunkIsSharedForStep(*step) || package.findChunk(dryChunkId) == nullptr)
+        setPcm16AudioChunk(package, dryChunkId, "dryReference", sweepSignal, spec.sampleRate);
+
+    audio.captureSource().loadCaptureSignal(outputSignal);
+    const auto captureChannels = audio.captureSource().captureChannelCount();
+    session.createNew(audio.currentSampleRate(), captureChannels, spec, std::move(outputSignal));
+
     package.metadata.sampleRate = spec.sampleRate;
     package.metadata.numInputChannels = captureChannels;
     package.metadata.numOutputChannels = wizard.mode == CaptureMode::Easy ? 1 : 2;
@@ -321,15 +476,6 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
     package.captureSettings.outputChannels = package.metadata.numOutputChannels;
     package.captureSettings.durationSeconds = spec.durationSeconds;
     package.captureSettings.testSignalType = TestSignalGenerator::toString(spec.type);
-
-    // Safety note: the generated dry signal still uses the calibrated dBFS
-    // level plus Easy-mode limiting above. This only changes how that already
-    // safe output is stored: gain anchors get a self-contained dry reference
-    // so model extraction can compare each return against the exact signal
-    // that was sent during that capture.
-    const auto dryChunkId = dryChunkIdForStep(*step);
-    if (! dryChunkIsSharedForStep(*step) || package.findChunk(dryChunkId) == nullptr)
-        setPcm16AudioChunk(package, dryChunkId, "dryReference", session.dryReferenceSignal(), spec.sampleRate);
 
     if (isCabinetPositionStep(*step))
         wizard.markCabinetSlotCapturing(stepId);
@@ -397,7 +543,10 @@ void CaptureEngine::resetCaptureStep(const juce::String& stepId)
     appState.appendLog("Reset guided capture step: " + step->title);
 }
 
-bool CaptureEngine::importCabinetIrForStep(const juce::String& stepId, const juce::File& file)
+bool CaptureEngine::importCabinetIrForStep(const juce::String& stepId,
+                                           const juce::File& file,
+                                           CabinetMicClass micClass,
+                                           const juce::String& micModelName)
 {
     auto& wizard = appState.captureWizard();
     auto* step = wizard.findStep(stepId);
@@ -436,7 +585,7 @@ bool CaptureEngine::importCabinetIrForStep(const juce::String& stepId, const juc
     stepResult.quality = quality;
     stepResult.alignedChunkId = chunkId;
     wizard.storeResult(stepResult);
-    wizard.markCabinetSlotImported(stepId, chunkId, file.getFileName());
+    wizard.markCabinetSlotImported(stepId, chunkId, file.getFileName(), micClass, micModelName);
 
     if (wizard.hasCabinetRealSource())
         if (auto* finalStep = wizard.findStep("final-validation"))
@@ -501,16 +650,35 @@ bool CaptureEngine::buildCabinetFromSlots()
     return true;
 }
 
+float CaptureEngine::modeAdjustedOutputDb() const noexcept
+{
+    // Standard: a reamp box provides analog gain, so the app output is fixed and
+    // there is no output slider; the user sets drive on the reamp box.
+    // Easy: no reamp box, so the app output is the only gain lever and follows
+    // the slider directly. Return clipping is the sole guard in both modes.
+    if (appState.captureWizard().mode == CaptureMode::Standard)
+        return standardOutputMaxDb;
+
+    return userCalibrationOutputDb;
+}
+
+float CaptureEngine::effectiveOutputDb() const noexcept
+{
+    return modeAdjustedOutputDb();
+}
+
 void CaptureEngine::setCalibrationOutputDb(float dbFs)
 {
-    userCalibrationOutputDb = juce::jlimit(-50.0f, -18.0f, dbFs);
+    // Slider ceiling -3 dBFS keeps true-peak headroom. The emitted level is
+    // mode-adjusted (modeAdjustedOutputDb) and applied as a smoothed output gain
+    // rather than baked into a freshly regenerated buffer, so dragging the
+    // slider ramps smoothly instead of stepping (clicking).
+    userCalibrationOutputDb = juce::jlimit(-50.0f, -3.0f, dbFs);
+    audio.captureSource().setCalibrationOutputGain(juce::Decibels::decibelsToGain(modeAdjustedOutputDb()));
 
     if (! isCalibrationMonitorRunning() || calibrationPhase != CalibrationMonitorPhase::Probing)
         return;
 
-    audio.captureSource().replaceCalibrationSignal(makeProbeCalibrationSignal(generator,
-                                                                              audio.currentSampleRate(),
-                                                                              userCalibrationOutputDb));
     audio.captureSource().clearRecentInputHistory();
     calibrationSafeTicks = 0;
 }
@@ -552,6 +720,11 @@ void CaptureEngine::startCalibrationMonitor()
     calibrationSafeTicks = 0;
     calibrationPhase = CalibrationMonitorPhase::MeasuringNoise;
     calibrationPhaseStartMs = juce::Time::getMillisecondCounterHiRes();
+    calibrationMuteWindowActive = false;
+    calibrationMuteDropIdentityOk = false;
+    calibrationLastMuteProbeMs = 0.0;
+    calibrationMuteSettleUntilMs = 0.0;
+    audio.captureSource().setOutputForceMuted(false);
     calibrationNoisePowerSum = 0.0;
     calibrationNoiseMeasurements = 0;
     calibrationNoiseFloorDbfsValue = -120.0f;
@@ -573,6 +746,8 @@ void CaptureEngine::stopCalibrationMonitor()
     audio.captureSource().stopCalibrationSignal();
     calibrationSafeTicks = 0;
     calibrationPhase = CalibrationMonitorPhase::Idle;
+    calibrationMuteWindowActive = false;
+    calibrationMuteDropIdentityOk = false;
     calibrationLiveStatusText.clear();
     calibrationLastLogCode.clear();
 }
@@ -585,6 +760,8 @@ void CaptureEngine::stopOutputSignal()
     audio.captureSource().setMonitoringEnabled(false);
     calibrationSafeTicks = 0;
     calibrationPhase = CalibrationMonitorPhase::Idle;
+    calibrationMuteWindowActive = false;
+    calibrationMuteDropIdentityOk = false;
     calibrationLiveStatusText.clear();
     calibrationLastLogCode.clear();
 }
@@ -601,7 +778,8 @@ bool CaptureEngine::isCalibrationLevelSafe() const noexcept
         && db >= calibrationInputMinDb
         && db <= calibrationInputMaxDb
         && calibrationSignalToNoiseDbValue >= calibrationRequiredSnrDb
-        && calibrationToneDominanceDb >= calibrationRequiredToneDominanceDb;
+        && (calibrationToneDominanceDb >= calibrationRequiredToneDominanceDb
+            || calibrationMuteDropIdentityOk);
 }
 
 bool CaptureEngine::isCalibrationOutputLevelSafe() const noexcept
@@ -688,9 +866,8 @@ void CaptureEngine::updateLiveCalibration()
         if (calibrationNoiseMeasurements > 0)
             calibrationNoiseFloorDbfsValue = powerToDb(calibrationNoisePowerSum / static_cast<double>(calibrationNoiseMeasurements));
 
-        audio.captureSource().replaceCalibrationSignal(makeProbeCalibrationSignal(generator,
-                                                                                  sampleRate,
-                                                                                  userCalibrationOutputDb));
+        audio.captureSource().setCalibrationOutputGain(juce::Decibels::decibelsToGain(modeAdjustedOutputDb()));
+        audio.captureSource().replaceCalibrationSignal(makeProbeCalibrationSignal(generator, sampleRate));
         audio.captureSource().clearRecentInputHistory();
         calibrationPhase = CalibrationMonitorPhase::Probing;
         calibrationPhaseStartMs = nowMs;
@@ -715,6 +892,51 @@ void CaptureEngine::updateLiveCalibration()
         return;
     }
 
+    if (calibrationMuteWindowActive)
+    {
+        if (nowMs - calibrationMuteStartMs < calibrationMuteWindowMs)
+        {
+            // Safe ticks are frozen (neither incremented nor reset) while the
+            // probe is muted, so the test does not penalise an honest signal.
+            calibrationLiveStatusText = utf8("정체성 검증: 출력을 잠시 뮤트하고 리턴 하강을 확인 중입니다.");
+            appState.currentPackage().captureWorkflow = wizard.toMetadataVar();
+            return;
+        }
+
+        const auto mutedWindowSamples = juce::jmax(1, static_cast<int>(sampleRate * 0.2));
+        const auto mutedReturn = audio.captureSource().copyRecentInputSignal(mutedWindowSamples);
+        const auto mutedDbfs = CalibrationValidator::rmsDbfs(mutedReturn);
+        const auto dropOk = CalibrationValidator::checkMuteDropIdentity(calibrationPreMuteReturnDbfs, mutedDbfs);
+
+        audio.captureSource().setOutputForceMuted(false);
+        audio.captureSource().clearRecentInputHistory();
+        calibrationMuteWindowActive = false;
+        calibrationMuteSettleUntilMs = nowMs + calibrationMuteSettleMs;
+        calibrationLastMuteProbeMs = nowMs;
+
+        if (dropOk)
+        {
+            calibrationMuteDropIdentityOk = true;
+            calibrationMuteDropValidUntilMs = nowMs + calibrationMuteDropValidityMs;
+            appState.appendLog("Calibration mute-drop identity confirmed: return fell from "
+                               + juce::String(calibrationPreMuteReturnDbfs, 1) + " to "
+                               + juce::String(mutedDbfs, 1) + " dBFS while the probe was muted.");
+        }
+        else
+        {
+            appState.appendLog("Calibration mute-drop identity failed: return stayed at "
+                               + juce::String(mutedDbfs, 1) + " dBFS while the probe was muted.");
+        }
+
+        return;
+    }
+
+    if (nowMs < calibrationMuteSettleUntilMs)
+        return;
+
+    if (calibrationMuteDropIdentityOk && nowMs >= calibrationMuteDropValidUntilMs)
+        calibrationMuteDropIdentityOk = false;
+
     const auto frequencies = TestSignalGenerator::multiSineFrequencies();
     const auto validation = CalibrationValidator::validateProbe(recentReturn,
                                                                sampleRate,
@@ -723,7 +945,8 @@ void CaptureEngine::updateLiveCalibration()
                                                                peakDb,
                                                                outputDb,
                                                                calibrationNoiseFloorDbfsValue,
-                                                               config);
+                                                               config,
+                                                               calibrationMuteDropIdentityOk);
     calibrationSignalToNoiseDbValue = validation.signalToNoiseDb;
     calibrationToneDominanceDb = validation.toneDominanceDb;
 
@@ -755,6 +978,19 @@ void CaptureEngine::updateLiveCalibration()
             appState.appendLog("Calibration waiting: " + validation.messageEnglish
                                + " SNR " + juce::String(validation.signalToNoiseDb, 1)
                                + " dB, tone dominance " + juce::String(validation.toneDominanceDb, 1) + " dB.");
+        }
+
+        // Heavy distortion can defeat the tone-dominance test on an honest
+        // signal: fall back to the mute-drop identity cycle.
+        if (validation.status == CalibrationValidationStatus::IdentityFailed
+            && nowMs - calibrationLastMuteProbeMs >= calibrationMuteRetryIntervalMs)
+        {
+            calibrationPreMuteReturnDbfs = validation.returnRmsDbfs;
+            audio.captureSource().setOutputForceMuted(true);
+            audio.captureSource().clearRecentInputHistory();
+            calibrationMuteWindowActive = true;
+            calibrationMuteStartMs = nowMs;
+            calibrationLiveStatusText = utf8("정체성 검증: 출력을 잠시 뮤트하고 리턴 하강을 확인 중입니다.");
         }
     }
 
@@ -837,8 +1073,12 @@ void CaptureEngine::reset()
     audio.captureSource().stopCalibrationSignal();
     clearPreviewModel();
     activeStepId.clear();
+    activeSampleSegments.clear();
+    activeSweepSamples = 0;
     calibrationSafeTicks = 0;
     calibrationPhase = CalibrationMonitorPhase::Idle;
+    calibrationMuteWindowActive = false;
+    calibrationMuteDropIdentityOk = false;
     calibrationLiveStatusText.clear();
     calibrationLastLogCode.clear();
     appState.appendLog("Capture reset.");
@@ -865,7 +1105,47 @@ void CaptureEngine::refresh()
             const auto alignedChunkId = alignedChunkIdForStep(*step);
             if (! step->isAnchorCapture())
                 setAudioChunk(package, capturedChunkId, "captured", session.capturedSignal(), session.getSampleRate());
-            setPcm16AudioChunk(package, alignedChunkId, "alignedCaptured", session.alignedCapturedSignal(), session.getSampleRate());
+
+            const auto& alignedFull = session.alignedCapturedSignal();
+            if (activeSweepSamples > 0 && alignedFull.getNumSamples() > 0)
+            {
+                // Composite capture: the aligned recording is sliced back into
+                // the sweep response (kept under the usual aligned chunk id so
+                // model extraction is unaffected) and per-sample responses.
+                const auto sweepLength = juce::jmin(activeSweepSamples, alignedFull.getNumSamples());
+                juce::AudioBuffer<float> sweepSlice(alignedFull.getNumChannels(), sweepLength);
+                for (int channel = 0; channel < alignedFull.getNumChannels(); ++channel)
+                    sweepSlice.copyFrom(channel, 0, alignedFull, channel, 0, sweepLength);
+                setPcm16AudioChunk(package, alignedChunkId, "alignedCaptured", sweepSlice, session.getSampleRate());
+
+                const auto stepPrefix = alignedChunkId.upToLastOccurrenceOf("/aligned-captured", false, false);
+                for (const auto& segment : activeSampleSegments)
+                {
+                    if (segment.startSample + segment.numSamples <= alignedFull.getNumSamples())
+                    {
+                        juce::AudioBuffer<float> sampleSlice(alignedFull.getNumChannels(), segment.numSamples);
+                        for (int channel = 0; channel < alignedFull.getNumChannels(); ++channel)
+                            sampleSlice.copyFrom(channel, 0, alignedFull, channel, segment.startSample, segment.numSamples);
+
+                        setPcm16AudioChunk(package,
+                                           stepPrefix + "/sample-" + segment.id + ".pcm16",
+                                           "ampProcessedSample",
+                                           sampleSlice,
+                                           session.getSampleRate());
+                        appState.appendLog("Stored amp-processed sample '" + segment.id
+                                           + "' (peak " + juce::String(peakDb(sampleSlice), 1) + " dBFS).");
+                    }
+                    else
+                    {
+                        appState.appendLog("Sample segment '" + segment.id
+                                           + "' was cut off after alignment; fidelity for it will be skipped.");
+                    }
+                }
+            }
+            else
+            {
+                setPcm16AudioChunk(package, alignedChunkId, "alignedCaptured", alignedFull, session.getSampleRate());
+            }
 
             const auto rightMuted = wizard.mode != CaptureMode::Easy
                                  || OutputRoutingPolicy::isRightChannelMuted(audio.captureSource().outputRoutingMode());
@@ -895,7 +1175,7 @@ void CaptureEngine::refresh()
                 wizard.calibrationPassed = true;
                 unlockPostCalibrationSteps(wizard);
             }
-            else if (step->stepId == "gain-010" && result.status != CaptureStepStatus::Failed)
+            else if (step->stepId == "gain-100" && result.status != CaptureStepStatus::Failed)
             {
                 if (auto* next = wizard.findStep("gain-050"))
                     if (next->status == CaptureStepStatus::NotStarted)
@@ -903,11 +1183,11 @@ void CaptureEngine::refresh()
             }
             else if (step->stepId == "gain-050" && result.status != CaptureStepStatus::Failed)
             {
-                if (auto* next = wizard.findStep("gain-100"))
+                if (auto* next = wizard.findStep("gain-010"))
                     if (next->status == CaptureStepStatus::NotStarted)
                         next->status = CaptureStepStatus::Ready;
             }
-            else if (step->stepId == "gain-100" && result.status != CaptureStepStatus::Failed)
+            else if (step->stepId == "gain-010" && result.status != CaptureStepStatus::Failed)
             {
                 if (auto* finalStep = wizard.findStep("final-validation"))
                     finalStep->status = CaptureStepStatus::Ready;
@@ -1152,6 +1432,16 @@ bool CaptureEngine::loadPreviewCabinetPackage(const HansoPackage& package)
 void CaptureEngine::setPreviewMicPositionPercent(float percent)
 {
     audio.captureSource().setPreviewMicPositionNormalized(juce::jlimit(0.0f, 100.0f, percent) / 100.0f);
+}
+
+void CaptureEngine::setPreviewCabinetMicClass(CabinetMicClass micClass)
+{
+    audio.captureSource().setPreviewCabinetMicClass(micClass);
+}
+
+bool CaptureEngine::previewCabinetHasMicMatrix() const noexcept
+{
+    return audio.captureSource().previewCabinetHasMicMatrix();
 }
 
 void CaptureEngine::clearPreviewCabinetPackage()

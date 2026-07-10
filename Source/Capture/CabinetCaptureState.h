@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 
 #include "Model/CabinetToneProfile.h"
+#include "Model/MicColoration.h"
 
 namespace hanso
 {
@@ -26,6 +27,10 @@ struct CabinetMicPositionSlot
     juce::String estimatedFrom;
     juce::String errorMessage;
     CabinetToneProfile toneProfile;
+    // Mic metadata for real sources. Unknown is valid: the mic matrix
+    // estimator then assumes the standard dynamic cab mic.
+    CabinetMicClass micClass { CabinetMicClass::Unknown };
+    juce::String micModelName;
 
     bool hasRealSource() const noexcept
     {
@@ -80,6 +85,14 @@ inline juce::var cabinetSlotToVar(const CabinetMicPositionSlot& slot, bool inclu
     position->setProperty("estimatedFrom",
                           slot.estimatedFrom.isNotEmpty()
                               ? juce::var(slot.estimatedFrom)
+                              : juce::var());
+    position->setProperty("micClass",
+                          slot.micClass != CabinetMicClass::Unknown
+                              ? juce::var(toString(slot.micClass))
+                              : juce::var());
+    position->setProperty("micModel",
+                          slot.micModelName.isNotEmpty()
+                              ? juce::var(slot.micModelName)
                               : juce::var());
     position->setProperty("toneProfile", slot.toneProfile.toVar());
     if (includeErrorField)

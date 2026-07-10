@@ -4,16 +4,22 @@
 
 #include <JuceHeader.h>
 
+#include "Analysis/CabinetMicMatrixEstimator.h"
 #include "Analysis/CabinetToneProfiler.h"
+#include "Analysis/MicColorationProfiles.h"
+#include "Audio/PreviewMicColorProcessor.h"
 #include "Analysis/CalibrationValidator.h"
+#include "Analysis/ModelFidelityEvaluator.h"
 #include "Analysis/CaptureQualityAnalyzer.h"
 #include "Analysis/ModelExtractionEngine.h"
 #include "Analysis/SpectrumUtils.h"
+#include "Capture/CabinetMicPositions.h"
 #include "Capture/CaptureWizardState.h"
 #include "Capture/SignalAlignment.h"
 #include "Capture/TestSignalGenerator.h"
 #include "Model/HansoPackage.h"
 #include "Serialization/HansoAudioChunkCodec.h"
+#include "Serialization/HansoSerializer.h"
 
 namespace
 {
@@ -322,6 +328,385 @@ void testEstimatedSlotInterpolation()
           "tone profile serialization round-trips");
 }
 
+void testSerializerReExportOverwrites()
+{
+    const auto file = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                          .getChildFile("hanso-lab-test-reexport.hanso");
+    file.deleteFile();
+
+    hanso::HansoPackage first;
+    first.formatVersion = 2;
+    first.metadata.name = "First Export";
+
+    hanso::HansoPackage second;
+    second.formatVersion = 2;
+    second.metadata.name = "Second Export";
+
+    juce::String error;
+    check(hanso::HansoSerializer::writeToFile(first, file, error), "first export writes", error);
+    check(hanso::HansoSerializer::writeToFile(second, file, error), "re-export over existing file writes", error);
+
+    // Reference size: the same package written to a fresh file.
+    const auto freshFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                               .getChildFile("hanso-lab-test-reexport-fresh.hanso");
+    freshFile.deleteFile();
+    check(hanso::HansoSerializer::writeToFile(second, freshFile, error), "fresh export writes", error);
+    check(file.getSize() == freshFile.getSize(), "re-export truncates instead of appending",
+          juce::String(file.getSize()) + " vs " + juce::String(freshFile.getSize()));
+    freshFile.deleteFile();
+
+    hanso::HansoPackage read;
+    check(hanso::HansoSerializer::readFromFile(file, read, error)
+              && read.metadata.name == "Second Export",
+          "re-exported file reads back the latest package", read.metadata.name);
+    file.deleteFile();
+}
+
+void testPreviewMicColorProcessor()
+{
+    // Produce a cabProfile with a real micMatrix through the wizard, exactly
+    // like an exported package would carry.
+    hanso::CaptureWizardState wizard(hanso::CaptureType::Cabinet);
+    auto* edge = wizard.findCabinetSlot("cab-edge");
+    if (edge == nullptr)
+    {
+        check(false, "cab-edge slot exists for preview mic color test");
+        return;
+    }
+
+    edge->source = hanso::CabinetSlotSource::ImportedIr;
+    edge->micClass = hanso::CabinetMicClass::Dynamic;
+    edge->toneProfile.valid = true;
+    edge->toneProfile.levelDb = -3.0f;
+    edge->toneProfile.bandGainsDb = { 2.0f, 1.0f, 0.0f, -1.0f, 1.0f, -3.0f };
+
+    hanso::HansoPackage package;
+    package.cabinetProfile = wizard.toCabinetProfileVar("Test Cab", "SM57", "Test speaker", "");
+
+    hanso::PreviewMicColorProcessor processor;
+    processor.prepare(sampleRate, 2);
+    check(processor.loadFromPackage(package), "preview mic color processor loads micMatrix");
+    processor.setMicPositionNormalized(0.33f);
+
+    juce::AudioBuffer<float> original(2, 512);
+    for (int channel = 0; channel < original.getNumChannels(); ++channel)
+        for (int i = 0; i < original.getNumSamples(); ++i)
+            original.setSample(channel, i,
+                               0.5f * std::sin(2.0f * juce::MathConstants<float>::pi * 1000.0f
+                                               * static_cast<float>(i) / static_cast<float>(sampleRate)));
+
+    auto bypassed = original;
+    processor.setTargetMicClass(hanso::CabinetMicClass::Unknown);
+    processor.process(bypassed, bypassed.getNumSamples());
+    auto bypassDelta = 0.0f;
+    for (int i = 0; i < original.getNumSamples(); ++i)
+        bypassDelta = juce::jmax(bypassDelta,
+                                 std::abs(bypassed.getSample(0, i) - original.getSample(0, i)));
+    check(bypassDelta < 1.0e-6f, "original mic selection is a strict bypass",
+          juce::String(bypassDelta, 8));
+
+    auto swapped = original;
+    processor.setTargetMicClass(hanso::CabinetMicClass::Ribbon);
+    processor.process(swapped, swapped.getNumSamples());
+    auto swapDelta = 0.0f;
+    for (int i = 0; i < original.getNumSamples(); ++i)
+        swapDelta = juce::jmax(swapDelta,
+                               std::abs(swapped.getSample(0, i) - original.getSample(0, i)));
+    check(swapDelta > 1.0e-3f, "ribbon mic swap audibly changes the signal",
+          juce::String(swapDelta, 6));
+
+    hanso::PreviewMicColorProcessor emptyProcessor;
+    emptyProcessor.prepare(sampleRate, 2);
+    hanso::HansoPackage emptyPackage;
+    check(! emptyProcessor.loadFromPackage(emptyPackage), "package without micMatrix stays inactive");
+}
+
+void testCabinetCaptureMicMetadata()
+{
+    hanso::CaptureWizardState wizard(hanso::CaptureType::Cabinet);
+
+    wizard.applyCabinetCaptureMic(hanso::CabinetMicClass::Ribbon, "R-121");
+    wizard.markCabinetSlotCaptured("cab-center", "cabinet/positions/cab-center/ir.pcm16");
+    const auto* center = wizard.findCabinetSlot("cab-center");
+    check(center != nullptr && center->micClass == hanso::CabinetMicClass::Ribbon
+              && center->micModelName == "R-121",
+          "captured slot inherits session capture mic");
+
+    wizard.applyCabinetCaptureMic(hanso::CabinetMicClass::Dynamic, "SM57");
+    check(center != nullptr && center->micClass == hanso::CabinetMicClass::Dynamic,
+          "changing session mic retroactively updates captured slots");
+
+    wizard.markCabinetSlotImported("cab-edge", "cabinet/positions/cab-edge/ir.pcm16", "edge.wav",
+                                   hanso::CabinetMicClass::Condenser, "C414");
+    wizard.applyCabinetCaptureMic(hanso::CabinetMicClass::Ribbon, "R-121");
+    const auto* edge = wizard.findCabinetSlot("cab-edge");
+    check(edge != nullptr && edge->micClass == hanso::CabinetMicClass::Condenser,
+          "imported slot keeps its own mic metadata");
+
+    wizard.setCaptureType(hanso::CaptureType::Cabinet);
+    check(wizard.cabinetCaptureMicClass == hanso::CabinetMicClass::Unknown
+              && wizard.cabinetCaptureMicModelName.isEmpty(),
+          "new capture resets session mic");
+}
+
+// Independent RBJ biquad used to synthesize mic/position-colored IRs by real
+// filtering. The estimator computes its curves analytically, so agreement here
+// validates the whole de-embedding chain through a second path.
+struct TestBiquad
+{
+    float b0 { 1.0f }, b1 { 0.0f }, b2 { 0.0f }, a1 { 0.0f }, a2 { 0.0f };
+    float z1 { 0.0f }, z2 { 0.0f };
+
+    enum class Type { LowPass, Peaking, LowShelf, HighShelf };
+
+    static TestBiquad make(Type type, double freqHz, double q, double gainDb)
+    {
+        const auto w0 = 2.0 * juce::MathConstants<double>::pi * freqHz / sampleRate;
+        const auto cosW0 = std::cos(w0);
+        const auto sinW0 = std::sin(w0);
+        const auto alpha = sinW0 / (2.0 * q);
+        const auto A = std::pow(10.0, gainDb / 40.0);
+        const auto sqrtA = std::sqrt(A);
+        const auto twoSqrtAAlpha = 2.0 * sqrtA * alpha;
+
+        double b0 = 1.0, b1 = 0.0, b2 = 0.0, a0 = 1.0, a1 = 0.0, a2 = 0.0;
+        switch (type)
+        {
+            case Type::LowPass:
+                b0 = (1.0 - cosW0) * 0.5; b1 = 1.0 - cosW0; b2 = (1.0 - cosW0) * 0.5;
+                a0 = 1.0 + alpha; a1 = -2.0 * cosW0; a2 = 1.0 - alpha;
+                break;
+            case Type::Peaking:
+                b0 = 1.0 + alpha * A; b1 = -2.0 * cosW0; b2 = 1.0 - alpha * A;
+                a0 = 1.0 + alpha / A; a1 = -2.0 * cosW0; a2 = 1.0 - alpha / A;
+                break;
+            case Type::LowShelf:
+                b0 = A * ((A + 1.0) - (A - 1.0) * cosW0 + twoSqrtAAlpha);
+                b1 = 2.0 * A * ((A - 1.0) - (A + 1.0) * cosW0);
+                b2 = A * ((A + 1.0) - (A - 1.0) * cosW0 - twoSqrtAAlpha);
+                a0 = (A + 1.0) + (A - 1.0) * cosW0 + twoSqrtAAlpha;
+                a1 = -2.0 * ((A - 1.0) + (A + 1.0) * cosW0);
+                a2 = (A + 1.0) + (A - 1.0) * cosW0 - twoSqrtAAlpha;
+                break;
+            case Type::HighShelf:
+                b0 = A * ((A + 1.0) + (A - 1.0) * cosW0 + twoSqrtAAlpha);
+                b1 = -2.0 * A * ((A - 1.0) + (A + 1.0) * cosW0);
+                b2 = A * ((A + 1.0) + (A - 1.0) * cosW0 - twoSqrtAAlpha);
+                a0 = (A + 1.0) - (A - 1.0) * cosW0 + twoSqrtAAlpha;
+                a1 = 2.0 * ((A - 1.0) - (A + 1.0) * cosW0);
+                a2 = (A + 1.0) - (A - 1.0) * cosW0 - twoSqrtAAlpha;
+                break;
+        }
+
+        TestBiquad biquad;
+        biquad.b0 = static_cast<float>(b0 / a0);
+        biquad.b1 = static_cast<float>(b1 / a0);
+        biquad.b2 = static_cast<float>(b2 / a0);
+        biquad.a1 = static_cast<float>(a1 / a0);
+        biquad.a2 = static_cast<float>(a2 / a0);
+        return biquad;
+    }
+
+    float process(float x)
+    {
+        const auto y = b0 * x + z1;
+        z1 = b1 * x - a1 * y + z2;
+        z2 = b2 * x - a2 * y;
+        return y;
+    }
+};
+
+void applyFilterChain(juce::AudioBuffer<float>& buffer, std::vector<TestBiquad> chain, float gainDb = 0.0f)
+{
+    auto* data = buffer.getWritePointer(0);
+    const auto gain = std::pow(10.0f, gainDb / 20.0f);
+    for (int i = 0; i < buffer.getNumSamples(); ++i)
+    {
+        auto sample = data[i];
+        for (auto& stage : chain)
+            sample = stage.process(sample);
+        data[i] = sample * gain;
+    }
+}
+
+std::vector<TestBiquad> micFilterChain(hanso::CabinetMicClass micClass)
+{
+    using Type = TestBiquad::Type;
+    switch (micClass)
+    {
+        case hanso::CabinetMicClass::Ribbon:
+            return { TestBiquad::make(Type::Peaking, 3500.0, 0.7, 0.5),
+                     TestBiquad::make(Type::Peaking, 420.0, 0.9, 4.0),
+                     TestBiquad::make(Type::Peaking, 6500.0, 0.8, -4.0) };
+        case hanso::CabinetMicClass::Condenser:
+            return { TestBiquad::make(Type::Peaking, 5000.0, 0.7, 1.0),
+                     TestBiquad::make(Type::Peaking, 11000.0, 0.5, 2.0) };
+        case hanso::CabinetMicClass::Unknown:
+        case hanso::CabinetMicClass::Dynamic:
+        default:
+            return { TestBiquad::make(Type::Peaking, 4200.0, 0.9, 3.0),
+                     TestBiquad::make(Type::Peaking, 8000.0, 0.7, -5.0) };
+    }
+}
+
+std::vector<TestBiquad> positionFilterChain(int positionIndex)
+{
+    using Type = TestBiquad::Type;
+    struct Params { double shelfHz, shelfQ, shelfDb, peakHz, peakQ, peakDb, highHz, highQ, highDb, cutHz; };
+    static const Params kParams[] = {
+        { 120.0, 0.7, 2.5, 2500.0, 1.0, 2.0, 6500.0, 0.8, 3.5, 9000.0 },
+        { 130.0, 0.7, 1.5, 2000.0, 1.0, 1.0, 6000.0, 0.8, 2.0, 8500.0 },
+        { 150.0, 0.8, 2.0, 1500.0, 1.1, 3.5, 5500.0, 0.9, 0.5, 7500.0 },
+        { 160.0, 0.7, 1.0, 2200.0, 1.0, -1.5, 5000.0, 0.8, -3.5, 6500.0 },
+    };
+
+    const auto& p = kParams[positionIndex];
+    return { TestBiquad::make(Type::LowShelf, p.shelfHz, p.shelfQ, p.shelfDb),
+             TestBiquad::make(Type::Peaking, p.peakHz, p.peakQ, p.peakDb),
+             TestBiquad::make(Type::HighShelf, p.highHz, p.highQ, p.highDb),
+             TestBiquad::make(Type::LowPass, p.cutHz, 0.707, 0.0) };
+}
+
+// Broadband synthetic "neutral cabinet" IR the coloration chains are applied to.
+juce::AudioBuffer<float> makeBaseCabinetIr()
+{
+    juce::AudioBuffer<float> ir(1, 8192);
+    ir.clear();
+    ir.setSample(0, 0, 1.0f);
+    applyFilterChain(ir, { TestBiquad::make(TestBiquad::Type::LowPass, 6500.0, 0.707, 0.0),
+                           TestBiquad::make(TestBiquad::Type::Peaking, 2000.0, 0.8, 3.0),
+                           TestBiquad::make(TestBiquad::Type::LowShelf, 120.0, 0.7, 2.0) });
+    return ir;
+}
+
+void testMicClassSuggestion()
+{
+    using hanso::CabinetMicClass;
+    check(hanso::suggestMicClassForModelName("Shure SM57") == CabinetMicClass::Dynamic,
+          "SM57 suggests dynamic");
+    check(hanso::suggestMicClassForModelName("royer r-121") == CabinetMicClass::Ribbon,
+          "R-121 suggests ribbon");
+    check(hanso::suggestMicClassForModelName("AKG C414 XLS") == CabinetMicClass::Condenser,
+          "C414 suggests condenser");
+    check(hanso::suggestMicClassForModelName("My Custom Mic") == CabinetMicClass::Unknown,
+          "unrecognised model stays unknown");
+    check(hanso::cabinetMicClassFromString(hanso::toString(CabinetMicClass::Ribbon)) == CabinetMicClass::Ribbon,
+          "mic class string round-trips");
+}
+
+void testMicColorationCurves()
+{
+    const auto dynamicBands = hanso::MicColorationProfiles::micColorationBandsDb(hanso::CabinetMicClass::Dynamic);
+    const auto ribbonBands = hanso::MicColorationProfiles::micColorationBandsDb(hanso::CabinetMicClass::Ribbon);
+    const auto unknownBands = hanso::MicColorationProfiles::micColorationBandsDb(hanso::CabinetMicClass::Unknown);
+
+    check(unknownBands == dynamicBands, "unknown mic assumes dynamic coloration");
+
+    // Ribbon: strong low-mid (160-350 band) vs dynamic; dynamic: presence peak
+    // (1.8k-4k band) vs ribbon.
+    check(ribbonBands[1] > dynamicBands[1] + 1.0f, "ribbon low-mid exceeds dynamic",
+          juce::String(ribbonBands[1], 2) + " / " + juce::String(dynamicBands[1], 2));
+    check(dynamicBands[4] > ribbonBands[4] + 1.0f, "dynamic presence exceeds ribbon",
+          juce::String(dynamicBands[4], 2) + " / " + juce::String(ribbonBands[4], 2));
+
+    const auto center = hanso::MicColorationProfiles::positionColorationBandsDb(0);
+    const auto offAxis = hanso::MicColorationProfiles::positionColorationBandsDb(3);
+    check(center[5] > offAxis[5] + 3.0f, "center keeps more highs than off-axis",
+          juce::String(center[5], 2) + " / " + juce::String(offAxis[5], 2));
+}
+
+void testCabinetMicMatrixEstimator()
+{
+    // Reference capture: dynamic mic at cap edge (slot cab-edge, index 1).
+    auto referenceIr = makeBaseCabinetIr();
+    applyFilterChain(referenceIr, micFilterChain(hanso::CabinetMicClass::Dynamic));
+    applyFilterChain(referenceIr, positionFilterChain(1), 0.0f);
+
+    // Ground truth for two combinations the estimator must predict.
+    auto ribbonEdgeIr = makeBaseCabinetIr();
+    applyFilterChain(ribbonEdgeIr, micFilterChain(hanso::CabinetMicClass::Ribbon));
+    applyFilterChain(ribbonEdgeIr, positionFilterChain(1), 0.0f);
+
+    auto dynamicCenterIr = makeBaseCabinetIr();
+    applyFilterChain(dynamicCenterIr, micFilterChain(hanso::CabinetMicClass::Dynamic));
+    applyFilterChain(dynamicCenterIr, positionFilterChain(0), 0.5f);
+
+    hanso::CaptureWizardState wizard(hanso::CaptureType::Cabinet);
+    auto* edge = wizard.findCabinetSlot("cab-edge");
+    check(edge != nullptr, "cab-edge slot exists");
+    if (edge == nullptr)
+        return;
+
+    edge->source = hanso::CabinetSlotSource::ImportedIr;
+    edge->micClass = hanso::CabinetMicClass::Dynamic;
+    edge->micModelName = "SM57";
+    edge->toneProfile = hanso::CabinetToneProfiler::fromImpulseResponse(referenceIr, sampleRate);
+    check(edge->toneProfile.valid, "reference tone profile valid");
+
+    const auto matrix = hanso::CabinetMicMatrixEstimator::estimate(wizard.cabinetSlots);
+    check(matrix.valid, "mic matrix computed from one real slot");
+    check(static_cast<int>(matrix.entries.size()) == 3 * hanso::cabinetMicPositionCount(),
+          "mic matrix covers every mic class x position combination");
+
+    const auto findEntry = [&matrix](hanso::CabinetMicClass micClass, const juce::String& positionId)
+        -> const hanso::CabinetMicMatrixEntry*
+    {
+        for (const auto& entry : matrix.entries)
+            if (entry.micClass == micClass && entry.positionId == positionId)
+                return &entry;
+        return nullptr;
+    };
+
+    const auto* measured = findEntry(hanso::CabinetMicClass::Dynamic, "cab-edge");
+    check(measured != nullptr && measured->measured && ! measured->toneProfile.estimated,
+          "reference combination stays measured");
+
+    const auto maxBandError = [](const hanso::CabinetToneProfile& predicted,
+                                 const hanso::CabinetToneProfile& truth)
+    {
+        auto maxError = 0.0f;
+        for (size_t band = 0; band < predicted.bandGainsDb.size(); ++band)
+            maxError = juce::jmax(maxError,
+                                  std::abs(predicted.bandGainsDb[band] - truth.bandGainsDb[band]));
+        return maxError;
+    };
+
+    const auto ribbonTruth = hanso::CabinetToneProfiler::fromImpulseResponse(ribbonEdgeIr, sampleRate);
+    const auto* ribbonEntry = findEntry(hanso::CabinetMicClass::Ribbon, "cab-edge");
+    check(ribbonEntry != nullptr && ribbonEntry->toneProfile.valid && ribbonEntry->toneProfile.estimated,
+          "ribbon swap entry estimated");
+    if (ribbonEntry != nullptr && ribbonTruth.valid)
+    {
+        const auto error = maxBandError(ribbonEntry->toneProfile, ribbonTruth);
+        check(error < 2.0f, "mic swap prediction matches filtered ground truth",
+              "max band error " + juce::String(error, 2) + " dB");
+    }
+
+    const auto centerTruth = hanso::CabinetToneProfiler::fromImpulseResponse(dynamicCenterIr, sampleRate);
+    const auto* centerEntry = findEntry(hanso::CabinetMicClass::Dynamic, "cab-center");
+    check(centerEntry != nullptr && centerEntry->toneProfile.valid && centerEntry->toneProfile.estimated,
+          "position swap entry estimated");
+    if (centerEntry != nullptr && centerTruth.valid)
+    {
+        const auto error = maxBandError(centerEntry->toneProfile, centerTruth);
+        check(error < 2.0f, "position swap prediction matches filtered ground truth",
+              "max band error " + juce::String(error, 2) + " dB");
+        check(std::abs(centerEntry->toneProfile.levelDb - centerTruth.levelDb) < 3.0f,
+              "position swap level within tolerance",
+              juce::String(centerEntry->toneProfile.levelDb, 2) + " / "
+                  + juce::String(centerTruth.levelDb, 2));
+    }
+
+    const auto matrixVar = wizard.toCabinetMicMatrixVar();
+    const auto* matrixObject = matrixVar.getDynamicObject();
+    check(matrixObject != nullptr
+              && matrixObject->getProperty("status").toString() == "computed"
+              && matrixObject->getProperty("entries").getArray() != nullptr
+              && matrixObject->getProperty("entries").getArray()->size()
+                     == 3 * hanso::cabinetMicPositionCount(),
+          "mic matrix serializes with all entries");
+}
+
 void testQualityAnalyzer()
 {
     const hanso::CaptureQualityAnalyzer analyzer;
@@ -403,6 +788,143 @@ void testCalibrationValidator()
           "calibration flags silent-output -40 dBFS return as loopback suspect",
           "status=" + silentResult.code + ", rms=" + juce::String(silentResult.returnRmsDbfs, 1));
 }
+
+void testMuteDropIdentity()
+{
+    // Pure decision function: a >=6 dB drop while muted confirms identity.
+    check(hanso::CalibrationValidator::checkMuteDropIdentity(-20.0f, -40.0f), "mute drop 20 dB confirms identity");
+    check(! hanso::CalibrationValidator::checkMuteDropIdentity(-20.0f, -22.0f), "mute drop 2 dB rejects identity");
+    check(! hanso::CalibrationValidator::checkMuteDropIdentity(-120.0f, -120.0f), "mute drop on silence rejects");
+
+    // A return whose energy sits beside the probe tones (as heavy IMD can do)
+    // fails Goertzel dominance; the mute-drop confirmation must rescue it.
+    const auto frequencies = hanso::TestSignalGenerator::multiSineFrequencies();
+    juce::AudioBuffer<float> offBandReturn(1, static_cast<int>(sampleRate * 1.5));
+    offBandReturn.clear();
+    for (int i = 0; i < offBandReturn.getNumSamples(); ++i)
+    {
+        auto value = 0.0;
+        for (const auto frequency : frequencies)
+        {
+            const auto t = static_cast<double>(i) / sampleRate;
+            value += std::sin(juce::MathConstants<double>::twoPi * frequency * 0.92 * t);
+            value += std::sin(juce::MathConstants<double>::twoPi * frequency * 1.08 * t);
+        }
+
+        offBandReturn.setSample(0, i, static_cast<float>(value / 20.0) * 0.14f);
+    }
+
+    const auto offBandRmsDb = rmsDbfs(offBandReturn);
+    const auto withoutRescue = hanso::CalibrationValidator::validateProbe(offBandReturn,
+                                                                          sampleRate,
+                                                                          frequencies.data(),
+                                                                          static_cast<int>(frequencies.size()),
+                                                                          peakDbfs(offBandReturn),
+                                                                          -33.0f,
+                                                                          offBandRmsDb - 30.0f);
+    check(withoutRescue.status == hanso::CalibrationValidationStatus::IdentityFailed,
+          "off-band return fails Goertzel dominance",
+          "dominance=" + juce::String(withoutRescue.toneDominanceDb, 1));
+
+    const auto withRescue = hanso::CalibrationValidator::validateProbe(offBandReturn,
+                                                                       sampleRate,
+                                                                       frequencies.data(),
+                                                                       static_cast<int>(frequencies.size()),
+                                                                       peakDbfs(offBandReturn),
+                                                                       -33.0f,
+                                                                       offBandRmsDb - 30.0f,
+                                                                       {},
+                                                                       true);
+    check(withRescue.status == hanso::CalibrationValidationStatus::Passed && withRescue.muteDropRescuedIdentity,
+          "mute-drop confirmation rescues identity-failing return",
+          "status=" + withRescue.code);
+
+    // Rescue must not bypass the level/SNR gates: noise stays rejected even
+    // with a (spurious) mute-drop confirmation.
+    auto broadbandNoise = makeWhiteNoiseWithRms(1.5, -30.0f, 0x4d554521);
+    const auto noiseWithRescue = hanso::CalibrationValidator::validateProbe(broadbandNoise,
+                                                                            sampleRate,
+                                                                            frequencies.data(),
+                                                                            static_cast<int>(frequencies.size()),
+                                                                            peakDbfs(broadbandNoise),
+                                                                            -33.0f,
+                                                                            -31.0f,
+                                                                            {},
+                                                                            true);
+    check(noiseWithRescue.status != hanso::CalibrationValidationStatus::Passed,
+          "mute-drop rescue does not bypass SNR gate",
+          "status=" + noiseWithRescue.code);
+}
+
+void testFidelityEvaluatorAndRefinement()
+{
+    const auto sample = makeMultiSine(2.0, 0.3f);
+
+    // ESR unit behaviour: identical buffers are near-perfect, uncorrelated
+    // noise is a total miss (~0 dB or worse).
+    check(hanso::ModelFidelityEvaluator::esrDb(sample, sample) <= -40.0f,
+          "ESR of identical buffers is very low",
+          juce::String(hanso::ModelFidelityEvaluator::esrDb(sample, sample), 1));
+
+    const auto noiseA = makeWhiteNoiseWithRms(2.0, -20.0f, 0x45535231);
+    const auto noiseB = makeWhiteNoiseWithRms(2.0, -20.0f, 0x45535232);
+    check(hanso::ModelFidelityEvaluator::esrDb(noiseA, noiseB) > -3.0f,
+          "ESR of uncorrelated noise is near 0 dB",
+          juce::String(hanso::ModelFidelityEvaluator::esrDb(noiseA, noiseB), 1));
+
+    // Refinement recovers a known anchor: the "real" recording is the render
+    // of a ground-truth anchor; starting from a detuned anchor the coordinate
+    // descent must reduce ESR and move drive toward the truth.
+    hanso::CompactHansoModelAnchor truth;
+    truth.parameterValue = 1.0f;
+    truth.drive = 6.0f;
+    truth.outputGainDb = -4.0f;
+    truth.lowShelfDb = 2.0f;
+    truth.midPeakDb = -1.0f;
+    truth.highShelfDb = 3.0f;
+
+    const auto real = hanso::ModelFidelityEvaluator::renderAnchor(sample, truth, sampleRate);
+
+    auto detuned = truth;
+    detuned.drive = 3.0f;
+    detuned.outputGainDb = -6.0f;
+
+    std::vector<const juce::AudioBuffer<float>*> dryPointers { &sample };
+    std::vector<const juce::AudioBuffer<float>*> realPointers { &real };
+    auto esrBefore = 0.0f;
+    auto esrAfter = 0.0f;
+    const auto refined = hanso::ModelFidelityEvaluator::refineAnchor(detuned,
+                                                                     dryPointers,
+                                                                     realPointers,
+                                                                     sampleRate,
+                                                                     esrBefore,
+                                                                     esrAfter);
+    check(esrAfter < esrBefore, "refinement reduces ESR",
+          juce::String(esrBefore, 1) + " -> " + juce::String(esrAfter, 1));
+    check(std::abs(refined.drive - truth.drive) <= 1.0f, "refinement recovers ground-truth drive",
+          "refined=" + juce::String(refined.drive, 2));
+}
+
+void testHighGainFirstUnlockChain()
+{
+    hanso::CaptureWizardState wizard(hanso::CaptureType::Amp);
+
+    juce::StringArray anchorOrder;
+    for (const auto& step : wizard.recipe.steps)
+        if (step.isAnchorCapture())
+            anchorOrder.add(step.stepId);
+
+    check(anchorOrder.size() == 3
+              && anchorOrder[0] == "gain-100"
+              && anchorOrder[1] == "gain-050"
+              && anchorOrder[2] == "gain-010",
+          "amp recipe orders anchors gain-100 -> gain-050 -> gain-010",
+          anchorOrder.joinIntoString(" -> "));
+
+    const auto* calibration = wizard.findStep("calibration");
+    check(calibration != nullptr && calibration->instructionText.contains(juce::String::fromUTF8("100%")),
+          "calibration instruction references gain 100%");
+}
 }
 
 int main()
@@ -414,8 +936,17 @@ int main()
     testSelfContainedAnchorDryLevels();
     testCabinetToneProfiler();
     testEstimatedSlotInterpolation();
+    testMicClassSuggestion();
+    testMicColorationCurves();
+    testCabinetMicMatrixEstimator();
+    testCabinetCaptureMicMetadata();
+    testPreviewMicColorProcessor();
+    testSerializerReExportOverwrites();
     testQualityAnalyzer();
     testCalibrationValidator();
+    testMuteDropIdentity();
+    testFidelityEvaluatorAndRefinement();
+    testHighGainFirstUnlockChain();
 
     if (failureCount > 0)
     {

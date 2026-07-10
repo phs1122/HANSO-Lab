@@ -1,5 +1,6 @@
 #include "Capture/CaptureWizardState.h"
 
+#include "Analysis/CabinetMicMatrixEstimator.h"
 #include "Capture/CabinetMessages.h"
 #include "Capture/CabinetMicPositions.h"
 #include "Capture/CaptureStepUtils.h"
@@ -39,7 +40,7 @@ juce::var qualityToVar(const CaptureQualityReport& report)
 }
 
 CaptureWizardState::CaptureWizardState()
-    : CaptureWizardState(CaptureType::Amp)
+    : CaptureWizardState(CaptureType::FullRig)   // Full Rig is the most common amp form
 {
 }
 
@@ -61,6 +62,8 @@ void CaptureWizardState::setCaptureType(CaptureType type)
     currentStepId = recipe.steps.empty() ? juce::String() : recipe.steps.front().stepId;
     calibrationPassed = false;
     warningExportAccepted = false;
+    cabinetCaptureMicClass = CabinetMicClass::Unknown;
+    cabinetCaptureMicModelName.clear();
 }
 
 CaptureStep* CaptureWizardState::findStep(const juce::String& stepId) noexcept
@@ -298,20 +301,43 @@ void CaptureWizardState::markCabinetSlotCaptured(const juce::String& stepId, con
         slot->source = CabinetSlotSource::CapturedIr;
         slot->impulseResponseChunkId = chunkId;
         slot->sourceFileName.clear();
+        slot->micClass = cabinetCaptureMicClass;
+        slot->micModelName = cabinetCaptureMicModelName;
         slot->estimatedFrom.clear();
         slot->errorMessage.clear();
     }
 }
 
-void CaptureWizardState::markCabinetSlotImported(const juce::String& stepId, const juce::String& chunkId, const juce::String& sourceFileName)
+void CaptureWizardState::markCabinetSlotImported(const juce::String& stepId,
+                                                 const juce::String& chunkId,
+                                                 const juce::String& sourceFileName,
+                                                 CabinetMicClass micClass,
+                                                 const juce::String& micModelName)
 {
     if (auto* slot = findCabinetSlot(stepId))
     {
         slot->source = CabinetSlotSource::ImportedIr;
         slot->impulseResponseChunkId = chunkId;
         slot->sourceFileName = sourceFileName;
+        slot->micClass = micClass;
+        slot->micModelName = micModelName;
         slot->estimatedFrom.clear();
         slot->errorMessage.clear();
+    }
+}
+
+void CaptureWizardState::applyCabinetCaptureMic(CabinetMicClass micClass, const juce::String& micModelName)
+{
+    cabinetCaptureMicClass = micClass;
+    cabinetCaptureMicModelName = micModelName;
+
+    for (auto& slot : cabinetSlots)
+    {
+        if (slot.source != CabinetSlotSource::CapturedIr)
+            continue;
+
+        slot.micClass = micClass;
+        slot.micModelName = micModelName;
     }
 }
 
@@ -433,6 +459,11 @@ void CaptureWizardState::estimateEmptyCabinetSlots()
     cabinetInterpolationComputed = interpolatedCount > 0 || ! anchors.empty();
 }
 
+juce::var CaptureWizardState::toCabinetMicMatrixVar() const
+{
+    return CabinetMicMatrixEstimator::estimate(cabinetSlots).toVar();
+}
+
 juce::var CaptureWizardState::toCabinetProfileVar(const juce::String& cabinetName,
                                                   const juce::String& micType,
                                                   const juce::String& speakerDescription,
@@ -446,6 +477,7 @@ juce::var CaptureWizardState::toCabinetProfileVar(const juce::String& cabinetNam
     profile->setProperty("notes", notes);
 
     profile->setProperty("positions", cabinetSlotsToVar(cabinetSlots, false));
+    profile->setProperty("micMatrix", toCabinetMicMatrixVar());
     return profile;
 }
 }

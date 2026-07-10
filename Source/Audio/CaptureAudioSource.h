@@ -5,6 +5,7 @@
 #include "Audio/InputChannelLayout.h"
 #include "Audio/PreviewCabinetIrProcessor.h"
 #include "Audio/PreviewCabinetProcessor.h"
+#include "Audio/PreviewMicColorProcessor.h"
 #include "Audio/PreviewModelProcessor.h"
 #include "Capture/OutputRoutingPolicy.h"
 #include "Capture/TestSignalGenerator.h"
@@ -30,11 +31,16 @@ public:
     void loadCaptureSignal(const juce::AudioBuffer<float>& drySignal);
     void loadCalibrationSignal(const juce::AudioBuffer<float>& signal);
     void replaceCalibrationSignal(const juce::AudioBuffer<float>& signal);
+    // Live calibration output level, applied as a smoothed gain in the audio
+    // callback so slider changes ramp instead of stepping (which clicks).
+    void setCalibrationOutputGain(float linearGain) noexcept;
     bool startCapture() noexcept;
     void stopCapture() noexcept;
     bool startCalibrationSignal() noexcept;
     void stopCalibrationSignal() noexcept;
     bool isCalibrationSignalRunning() const noexcept;
+    void setOutputForceMuted(bool muted) noexcept;
+    bool isOutputForceMuted() const noexcept;
     bool isCaptureRunning() const noexcept;
     double captureProgress() const noexcept;
     bool hasCaptureFinished() const noexcept;
@@ -44,6 +50,9 @@ public:
     void clearPreviewModel() noexcept;
     bool loadPreviewCabinetPackage(const HansoPackage& package, juce::String& error);
     void setPreviewMicPositionNormalized(float normalizedPosition) noexcept;
+    // Mic-swap EQ preview from cabProfile.micMatrix. Unknown = original mic.
+    void setPreviewCabinetMicClass(CabinetMicClass micClass) noexcept;
+    bool previewCabinetHasMicMatrix() const noexcept;
     void clearPreviewCabinetPackage() noexcept;
     bool hasPreviewCabinetPackage() const noexcept;
     juce::String previewCabinetSummary() const;
@@ -86,11 +95,18 @@ private:
     PreviewModelProcessor previewProcessor;
     PreviewCabinetProcessor cabinetProcessor;
     PreviewCabinetIrProcessor cabinetIrProcessor;
+    PreviewMicColorProcessor micColorProcessor;
     std::atomic<int> playhead { 0 };
     std::atomic<int> calibrationPlayhead { 0 };
+    std::atomic<float> calibrationOutputGainTarget { 1.0f };
+    float currentCalibrationOutputGain { 1.0f }; // audio thread only
     std::atomic<bool> captureRunning { false };
     std::atomic<bool> captureFinished { false };
     std::atomic<bool> calibrationRunning { false };
+    // Mute-drop identity test: silences the calibration output for a short
+    // window while recording continues, so the return path can prove it
+    // follows our output. Atomic load + branch only — realtime-safe.
+    std::atomic<bool> outputForceMuted { false };
     std::atomic<bool> previewSampleRunning { false };
     std::atomic<int> previewSamplePlayhead { 0 };
     std::atomic<float> latestInputLevel { 0.0f };

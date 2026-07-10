@@ -38,6 +38,10 @@ public:
     bool warningExportAccepted { false };
     bool cabinetInterpolationComputed { false };
     std::vector<CabinetMicPositionSlot> cabinetSlots;
+    // Session-level mic used for direct cabinet captures. Applied to
+    // captured-ir slots; imported slots carry their own per-import metadata.
+    CabinetMicClass cabinetCaptureMicClass { CabinetMicClass::Unknown };
+    juce::String cabinetCaptureMicModelName;
 
     void setCaptureType(CaptureType type);
     CaptureStep* findStep(const juce::String& stepId) noexcept;
@@ -56,13 +60,24 @@ public:
     CabinetMicPositionSlot* findCabinetSlot(const juce::String& stepId) noexcept;
     const CabinetMicPositionSlot* findCabinetSlot(const juce::String& stepId) const noexcept;
     void markCabinetSlotCaptured(const juce::String& stepId, const juce::String& chunkId);
-    void markCabinetSlotImported(const juce::String& stepId, const juce::String& chunkId, const juce::String& sourceFileName);
+    void markCabinetSlotImported(const juce::String& stepId,
+                                 const juce::String& chunkId,
+                                 const juce::String& sourceFileName,
+                                 CabinetMicClass micClass = CabinetMicClass::Unknown,
+                                 const juce::String& micModelName = {});
+    // Updates the session capture mic and retroactively applies it to every
+    // captured-ir slot (imported slots keep their own metadata).
+    void applyCabinetCaptureMic(CabinetMicClass micClass, const juce::String& micModelName);
     void markCabinetSlotCapturing(const juce::String& stepId);
     void markCabinetSlotError(const juce::String& stepId, const juce::String& error);
     void resetCabinetSlot(const juce::String& stepId);
     bool hasCabinetRealSource() const noexcept;
     juce::StringArray cabinetRealSourceIds() const;
     void estimateEmptyCabinetSlots();
+    // Full (mic class x mic position) tone profile matrix estimated from the
+    // real-source slots. Returns void var until at least one real slot has a
+    // valid tone profile.
+    juce::var toCabinetMicMatrixVar() const;
     juce::var toCabinetProfileVar(const juce::String& cabinetName,
                                   const juce::String& micType,
                                   const juce::String& speakerDescription,

@@ -58,6 +58,9 @@ private:
     void stopPlayback();
     void updateGainModel();
     void updateButtonState();
+    void toggleRealCaptureMode();
+    juce::String realCaptureChunkIdForSelection() const;
+    bool playRealCaptureRecording();
     bool readSampleFile(const juce::File& file, juce::AudioBuffer<float>& buffer, juce::String& error);
     static void resampleLinear(const juce::AudioBuffer<float>& source,
                                double sourceSampleRate,
@@ -81,12 +84,18 @@ private:
     juce::Label folderLabel;
     juce::Label ampLabel;
     juce::Slider gainSlider;
+    // Cabinet package mode only: mic-swap EQ preview from cabProfile.micMatrix.
+    juce::ComboBox previewMicBox;
     juce::ListBox sampleList { "Preview Samples", this };
     juce::TextButton playButton { "Play" };
     juce::TextButton stopButton { "Stop" };
     juce::TextButton loopButton { "Loop" };
     juce::TextButton normalizationButton { "Norm" };
     juce::TextButton cabinetButton { "Cab" };
+    // A/B: plays the amp-processed recording of the selected sample (stored
+    // during capture) instead of rendering the model — honest reference.
+    juce::TextButton realCaptureButton { "Real" };
+    bool realCaptureMode { false };
     juce::Slider volumeSlider;
     juce::TextButton addButton { "Add Samples" };
     juce::TextButton openHansoButton { "Open HANSO" };

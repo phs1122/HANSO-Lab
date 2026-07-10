@@ -2,7 +2,9 @@
 
 #include "Analysis/ModelExtractionEngine.h"
 #include "App/Utf8.h"
+#include "Capture/CaptureStepUtils.h"
 #include "Preview/PreviewSampleLibrary.h"
+#include "Serialization/HansoAudioChunkCodec.h"
 #include "Serialization/HansoModelCodec.h"
 #include "Serialization/HansoSerializer.h"
 
@@ -78,6 +80,29 @@ TonePreviewPanel::TonePreviewPanel(ApplicationState& state, CaptureEngine& captu
     loopButton.onClick = [this] { capture.setPreviewLoopEnabled(loopButton.getToggleState()); };
     normalizationButton.onClick = [this] { capture.setPreviewNormalizationEnabled(normalizationButton.getToggleState()); };
     cabinetButton.onClick = [this] { capture.setPreviewCabinetEnabled(cabinetButton.getToggleState()); };
+    realCaptureButton.setClickingTogglesState(true);
+    realCaptureButton.setTooltip(utf8("모델 렌더 대신, 캡쳐 시 실제 앰프를 거쳐 녹음된 샘플을 재생합니다 (A/B 비교)."));
+    realCaptureButton.onClick = [this] { toggleRealCaptureMode(); };
+
+    previewMicBox.addItem("Mic: Original", 1);
+    previewMicBox.addItem("Mic: Dynamic", 2);
+    previewMicBox.addItem("Mic: Ribbon", 3);
+    previewMicBox.addItem("Mic: Condenser", 4);
+    previewMicBox.setSelectedId(1, juce::dontSendNotification);
+    previewMicBox.setTooltip(utf8("micMatrix 기반 마이크 전환 EQ 프리뷰입니다. Original은 패키지의 실측 마이크 그대로 재생합니다."));
+    previewMicBox.onChange = [this]
+    {
+        auto micClass = CabinetMicClass::Unknown;
+        switch (previewMicBox.getSelectedId())
+        {
+            case 2: micClass = CabinetMicClass::Dynamic; break;
+            case 3: micClass = CabinetMicClass::Ribbon; break;
+            case 4: micClass = CabinetMicClass::Condenser; break;
+            default: break;
+        }
+        capture.setPreviewCabinetMicClass(micClass);
+    };
+    addAndMakeVisible(previewMicBox);
     volumeSlider.setRange(-24.0, 12.0, 0.1);
     volumeSlider.setValue(capture.previewOutputGainDb(), juce::dontSendNotification);
     volumeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 70, 22);
@@ -101,6 +126,7 @@ TonePreviewPanel::TonePreviewPanel(ApplicationState& state, CaptureEngine& captu
     addAndMakeVisible(loopButton);
     addAndMakeVisible(normalizationButton);
     addAndMakeVisible(cabinetButton);
+    addAndMakeVisible(realCaptureButton);
     addAndMakeVisible(volumeSlider);
     addAndMakeVisible(addButton);
     addAndMakeVisible(openHansoButton);
@@ -161,6 +187,8 @@ void TonePreviewPanel::resized()
     auto gainRow = area.removeFromTop(36);
     gainRow.removeFromLeft(90);
     gainSlider.setBounds(gainRow.removeFromLeft(420).reduced(0, 4));
+    gainRow.removeFromLeft(12);
+    previewMicBox.setBounds(gainRow.removeFromLeft(160).reduced(0, 5));
 
     area.removeFromTop(12);
     auto buttonRow = area.removeFromTop(36);
@@ -185,6 +213,8 @@ void TonePreviewPanel::resized()
     normalizationButton.setBounds(transport.removeFromLeft(64).reduced(0, 3));
     transport.removeFromLeft(6);
     cabinetButton.setBounds(transport.removeFromLeft(58).reduced(0, 3));
+    transport.removeFromLeft(6);
+    realCaptureButton.setBounds(transport.removeFromLeft(58).reduced(0, 3));
     transport.removeFromLeft(10);
     volumeSlider.setBounds(transport.removeFromLeft(190).reduced(0, 4));
     transport.removeFromLeft(12);
@@ -213,7 +243,7 @@ void TonePreviewPanel::paintListBoxItem(int rowNumber,
 
     const auto& file = samples[rowNumber];
     g.setColour(juce::Colours::white);
-    g.setFont(15.0f);
+    g.setFont(17.5f);
     g.drawText(file.getFileNameWithoutExtension(), 10, 0, width - 96, height, juce::Justification::centredLeft);
 
     g.setColour(juce::Colours::grey);
@@ -244,11 +274,13 @@ void TonePreviewPanel::applyPreviewControlLabels()
     {
         gainSlider.setTextValueSuffix("% Mic");
         ampLabel.setText("HANSO CAB\nMic Position", juce::dontSendNotification);
+        previewMicBox.setVisible(true);
     }
     else
     {
         gainSlider.setTextValueSuffix("% Gain");
         ampLabel.setText("HANSO AMP\nPreview Cabinet", juce::dontSendNotification);
+        previewMicBox.setVisible(false);
     }
 }
 
@@ -291,6 +323,8 @@ bool TonePreviewPanel::loadCabinetPackageFromFile(const juce::File& file, HansoP
     observedPreviewRevision = capture.previewModelRevision();
     applyPreviewControlLabels();
     capture.setPreviewMicPositionPercent(static_cast<float>(gainSlider.getValue()));
+    previewMicBox.setSelectedId(1, juce::dontSendNotification);
+    capture.setPreviewCabinetMicClass(CabinetMicClass::Unknown);
 
     const auto toneName = package.metadata.name.trim().isNotEmpty()
                         ? package.metadata.name.trim()
@@ -461,6 +495,8 @@ void TonePreviewPanel::syncModelFromCaptureEngine()
             modelReady = true;
             capture.setPreviewMicPositionPercent(static_cast<float>(gainSlider.getValue()));
             applyPreviewControlLabels();
+            previewMicBox.setSelectedId(1, juce::dontSendNotification);
+            capture.setPreviewCabinetMicClass(CabinetMicClass::Unknown);
             modelLabel.setText(utf8("Cabinet preview active."), juce::dontSendNotification);
             return;
         }
@@ -554,6 +590,18 @@ void TonePreviewPanel::playSelectedSample()
         return;
     }
 
+    if (realCaptureMode)
+    {
+        if (playRealCaptureRecording())
+            return;
+
+        // No recording for this sample/anchor: fall back to model rendering.
+        realCaptureMode = false;
+        realCaptureButton.setToggleState(false, juce::dontSendNotification);
+        statusLabel.setText(utf8("이 샘플/게인 조합의 실캡쳐 녹음이 없어 모델 렌더로 재생합니다."),
+                            juce::dontSendNotification);
+    }
+
     juce::AudioBuffer<float> sample;
     juce::String error;
     if (! readSampleFile(samples[row], sample, error))
@@ -562,11 +610,95 @@ void TonePreviewPanel::playSelectedSample()
         return;
     }
 
+    if (modelReady && ! capture.hasPreviewModel() && previewSourceMode == PreviewSourceMode::AmpModel)
+        loadModelFromPackage();
+
     waveform.setAudioBuffer(sample, capture.currentSampleRate());
     updateGainModel();
     capture.loadPreviewSample(sample);
     if (capture.startPreviewSample())
         statusLabel.setText("Playing Sample: " + samples[row].getFileName(), juce::dontSendNotification);
+}
+
+juce::String TonePreviewPanel::realCaptureChunkIdForSelection() const
+{
+    const auto row = sampleList.getSelectedRow();
+    if (row < 0 || row >= samples.size())
+        return {};
+
+    const auto sampleId = sanitizePreviewSampleId(samples[row].getFileNameWithoutExtension());
+
+    // Nearest gain anchor to the slider position.
+    const auto gainPercent = gainSlider.getValue();
+    juce::String anchorDirectory = "gain-050";
+    if (std::abs(gainPercent - 10.0) < std::abs(gainPercent - 50.0)
+        && std::abs(gainPercent - 10.0) < std::abs(gainPercent - 100.0))
+        anchorDirectory = "gain-010";
+    else if (std::abs(gainPercent - 100.0) <= std::abs(gainPercent - 50.0))
+        anchorDirectory = "gain-100";
+
+    const auto chunkId = "capture/" + anchorDirectory + "/sample-" + sampleId + ".pcm16";
+    return appState.currentPackage().findChunk(chunkId) != nullptr ? chunkId : juce::String();
+}
+
+bool TonePreviewPanel::playRealCaptureRecording()
+{
+    const auto chunkId = realCaptureChunkIdForSelection();
+    if (chunkId.isEmpty())
+        return false;
+
+    const auto* chunk = appState.currentPackage().findChunk(chunkId);
+    juce::AudioBuffer<float> recording;
+    double recordingSampleRate = 0.0;
+    juce::String error;
+    if (chunk == nullptr
+        || ! HansoAudioChunkCodec::decodePcm16Audio(chunk->data, recording, recordingSampleRate, error))
+        return false;
+
+    if (recordingSampleRate > 0.0 && std::abs(recordingSampleRate - capture.currentSampleRate()) > 0.5)
+    {
+        juce::AudioBuffer<float> resampled;
+        resampleLinear(recording, recordingSampleRate, capture.currentSampleRate(), resampled);
+        recording = std::move(resampled);
+    }
+
+    // The recording already went through the real amp — bypass the model so
+    // it is not amped twice. The model is restored when Real mode is left.
+    capture.clearPreviewModel();
+    waveform.setAudioBuffer(recording, capture.currentSampleRate());
+    capture.loadPreviewSample(recording);
+    if (! capture.startPreviewSample())
+        return false;
+
+    statusLabel.setText("Playing REAL capture: " + chunkId, juce::dontSendNotification);
+    return true;
+}
+
+void TonePreviewPanel::toggleRealCaptureMode()
+{
+    realCaptureMode = realCaptureButton.getToggleState();
+
+    if (realCaptureMode)
+    {
+        if (realCaptureChunkIdForSelection().isEmpty())
+        {
+            realCaptureMode = false;
+            realCaptureButton.setToggleState(false, juce::dontSendNotification);
+            statusLabel.setText(utf8("이 샘플/게인 조합의 실캡쳐 녹음이 패키지에 없습니다."),
+                                juce::dontSendNotification);
+            return;
+        }
+
+        statusLabel.setText(utf8("Real Capture 모드: 실제 앰프를 거친 녹음을 재생합니다."),
+                            juce::dontSendNotification);
+    }
+    else
+    {
+        capture.stopPreviewSample();
+        if (previewSourceMode == PreviewSourceMode::AmpModel)
+            loadModelFromPackage();
+        statusLabel.setText(utf8("Model 모드: compact model 렌더로 재생합니다."), juce::dontSendNotification);
+    }
 }
 
 void TonePreviewPanel::stopPlayback()
@@ -594,6 +726,10 @@ void TonePreviewPanel::updateButtonState()
     stopButton.setEnabled(capture.isPreviewSamplePlaying());
     gainSlider.setEnabled(modelReady);
     cabinetButton.setEnabled(modelReady && previewSourceMode == PreviewSourceMode::AmpModel);
+    previewMicBox.setEnabled(previewSourceMode == PreviewSourceMode::CabinetPackage
+                             && capture.previewCabinetHasMicMatrix());
+    realCaptureButton.setEnabled(previewSourceMode == PreviewSourceMode::AmpModel
+                                 && realCaptureChunkIdForSelection().isNotEmpty());
     loopButton.setToggleState(capture.isPreviewLoopEnabled(), juce::dontSendNotification);
     normalizationButton.setToggleState(capture.isPreviewNormalizationEnabled(), juce::dontSendNotification);
     cabinetButton.setToggleState(capture.isPreviewCabinetEnabled(), juce::dontSendNotification);

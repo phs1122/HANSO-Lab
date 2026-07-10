@@ -61,14 +61,18 @@ set(HANSO_LAB_APP_SOURCES
     Source/Capture/SignalAlignment.cpp
     Source/Capture/TestSignalGenerator.cpp
     Source/Analysis/AnalysisEngine.cpp
+    Source/Analysis/CabinetMicMatrixEstimator.cpp
     Source/Analysis/CabinetToneProfiler.cpp
     Source/Analysis/CalibrationValidator.cpp
+    Source/Analysis/MicColorationProfiles.cpp
     Source/Analysis/CaptureQualityAnalyzer.cpp
     Source/Analysis/DynamicResponseAnalyzer.cpp
     Source/Analysis/FrequencyResponseAnalyzer.cpp
     Source/Analysis/ModelExtractionEngine.cpp
+    Source/Analysis/ModelFidelityEvaluator.cpp
     Source/Analysis/ResidualDatasetBuilder.cpp
     Source/Analysis/TransferCurveAnalyzer.cpp
+    Source/Audio/PreviewMicColorProcessor.cpp
     Source/Model/HansoPackage.cpp
     Source/Preview/PreviewSampleLibrary.cpp
     Source/Serialization/HansoSerializer.cpp
@@ -78,6 +82,7 @@ set(HANSO_LAB_APP_SOURCES
     Source/UI/AudioSettingsPanel.cpp
     Source/UI/CaptureInputControls.cpp
     Source/UI/CapturePanel.cpp
+    Source/UI/OnboardingPanel.cpp
     Source/UI/CaptureStatusIcon.cpp
     Source/UI/PreviewWaveformComponent.cpp
     Source/UI/TonePreviewPanel.cpp
@@ -122,17 +127,23 @@ juce_add_console_app(HANSO_Lab_Tests
 
 target_sources(HANSO_Lab_Tests PRIVATE
     Source/Tests/TestsMain.cpp
+    Source/Analysis/CabinetMicMatrixEstimator.cpp
     Source/Analysis/CabinetToneProfiler.cpp
     Source/Analysis/CalibrationValidator.cpp
+    Source/Analysis/MicColorationProfiles.cpp
     Source/Analysis/CaptureQualityAnalyzer.cpp
     Source/Analysis/ModelExtractionEngine.cpp
+    Source/Analysis/ModelFidelityEvaluator.cpp
+    Source/Audio/PreviewMicColorProcessor.cpp
+    Source/Audio/PreviewModelProcessor.cpp
     Source/Capture/CaptureRecipe.cpp
     Source/Capture/CaptureWizardState.cpp
     Source/Capture/SignalAlignment.cpp
     Source/Capture/TestSignalGenerator.cpp
     Source/Model/HansoPackage.cpp
     Source/Serialization/HansoAudioChunkCodec.cpp
-    Source/Serialization/HansoModelCodec.cpp)
+    Source/Serialization/HansoModelCodec.cpp
+    Source/Serialization/HansoSerializer.cpp)
 
 target_include_directories(HANSO_Lab_Tests
     PRIVATE
@@ -148,6 +159,47 @@ target_link_libraries(HANSO_Lab_Tests
         juce::juce_audio_devices
         juce::juce_audio_formats
         juce::juce_audio_utils
+        juce::juce_core
+        juce::juce_data_structures
+        juce::juce_dsp
+        juce::juce_events
+        juce::juce_graphics
+        juce::juce_gui_basics
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+
+# Headless cabinet authoring CLI: builds a Cabinet .hanso from IR wav files.
+#   cmake --build build --target HANSO_Lab_CabCli
+#   "./build/HANSO_Lab_CabCli_artefacts/Debug/HANSO_Lab_CabCli" --help-less usage in source header
+juce_add_console_app(HANSO_Lab_CabCli
+    PRODUCT_NAME "HANSO_Lab_CabCli")
+
+target_sources(HANSO_Lab_CabCli PRIVATE
+    Source/Tools/CabinetPackageCli.cpp
+    Source/Analysis/CabinetMicMatrixEstimator.cpp
+    Source/Analysis/CabinetToneProfiler.cpp
+    Source/Analysis/MicColorationProfiles.cpp
+    Source/Capture/CabinetIrImporter.cpp
+    Source/Capture/CaptureRecipe.cpp
+    Source/Capture/CaptureWizardState.cpp
+    Source/Model/HansoPackage.cpp
+    Source/Serialization/HansoAudioChunkCodec.cpp
+    Source/Serialization/HansoModelCodec.cpp
+    Source/Serialization/HansoSerializer.cpp)
+
+target_include_directories(HANSO_Lab_CabCli
+    PRIVATE
+        Source)
+
+target_compile_definitions(HANSO_Lab_CabCli
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0)
+
+target_link_libraries(HANSO_Lab_CabCli
+    PRIVATE
+        juce::juce_audio_formats
         juce::juce_core
         juce::juce_data_structures
         juce::juce_dsp

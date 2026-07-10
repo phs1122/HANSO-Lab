@@ -40,6 +40,12 @@ bool HansoSerializer::writeToFile(const HansoPackage& package, const juce::File&
         return false;
     }
 
+    // FileOutputStream opens in append mode; re-exporting over an existing
+    // .hanso would otherwise concatenate, and readers would keep seeing the
+    // stale first package at the start of the file.
+    stream->setPosition(0);
+    stream->truncate();
+
     const auto json = metadataToJson(package);
     const auto jsonBytes = json.getNumBytesAsUTF8();
 

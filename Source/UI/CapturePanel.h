@@ -21,9 +21,13 @@ public:
     CapturePanel(ApplicationState& state, CaptureEngine& captureEngine, LabWorkflow& workflow);
     void startUpdating();
     void resized() override;
+    void paint(juce::Graphics& g) override;
     void paintOverChildren(juce::Graphics& g) override;
     void setLayoutDebugEnabled(bool enabled);
     bool isLayoutDebugEnabled() const noexcept;
+    // Applies an onboarding questionnaire result: capture type + mode, then
+    // starts a fresh capture reflecting them.
+    void applyOnboardingSelection(CaptureType type, CaptureMode mode);
 
 private:
     void timerCallback() override;
@@ -40,6 +44,8 @@ private:
     void updateStepActions();
     void runFinishCaptureAnalysis();
     void showImportIrChooser(const juce::String& stepId);
+    void showImportIrMicMetadataDialog(const juce::String& stepId, const juce::File& file);
+    void applyCaptureMicFromControls();
     void showAssetExportDialog();
     void updateCompletionActions();
     void showTonePreviewDialog();
@@ -51,6 +57,7 @@ private:
     ApplicationState& appState;
     CaptureEngine& capture;
     LabWorkflow& labWorkflow;
+    juce::Rectangle<int> leftCardBounds, rightCardBounds;   // Stage 2b card backgrounds
     juce::Label title;
     juce::Label statusLabel;
     juce::Label captureTypeLabel;
@@ -67,7 +74,11 @@ private:
     juce::OwnedArray<juce::TextButton> stepStopButtons;
     juce::OwnedArray<juce::TextButton> stepResetButtons;
     juce::OwnedArray<juce::TextButton> stepImportButtons;
+    juce::Label captureMicLabel;
+    juce::ComboBox captureMicClassBox;
+    juce::TextEditor captureMicModelEditor;
     std::unique_ptr<juce::FileChooser> irImportChooser;
+    std::unique_ptr<juce::AlertWindow> irImportMetadataDialog;
     juce::Label instructionTitleLabel;
     juce::Label instructionLabel;
     juce::TextButton generateButton { "Generate Test Signal" };

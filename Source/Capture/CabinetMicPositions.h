@@ -31,6 +31,15 @@ inline int cabinetMicPositionCount() noexcept
     return static_cast<int>(sizeof(kCabinetMicPositions) / sizeof(kCabinetMicPositions[0]));
 }
 
+inline int positionIndexForCabinetId(const juce::String& id) noexcept
+{
+    for (int index = 0; index < cabinetMicPositionCount(); ++index)
+        if (id == kCabinetMicPositions[index].id)
+            return index;
+
+    return -1;
+}
+
 inline float normalizedPositionForCabinetId(const juce::String& id) noexcept
 {
     for (const auto& position : kCabinetMicPositions)

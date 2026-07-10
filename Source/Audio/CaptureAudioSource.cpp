@@ -7,6 +7,7 @@ void CaptureAudioSource::prepare(double sampleRate, int maximumBlockSize, int ou
     previewProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
     cabinetProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
     cabinetIrProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
+    micColorProcessor.prepare(sampleRate, outputChannels);
     previewScratchBuffer.setSize(juce::jmax(1, outputChannels),
                                  juce::jmax(1, maximumBlockSize),
                                  false,
@@ -98,6 +99,11 @@ void CaptureAudioSource::replaceCalibrationSignal(const juce::AudioBuffer<float>
     calibrationPlayhead.store(0);
 }
 
+void CaptureAudioSource::setCalibrationOutputGain(float linearGain) noexcept
+{
+    calibrationOutputGainTarget.store(juce::jlimit(0.0f, 1.0f, linearGain));
+}
+
 bool CaptureAudioSource::startCapture() noexcept
 {
     if (playbackSignal.getNumSamples() <= 0)
@@ -131,6 +137,17 @@ bool CaptureAudioSource::startCalibrationSignal() noexcept
 void CaptureAudioSource::stopCalibrationSignal() noexcept
 {
     calibrationRunning.store(false);
+    outputForceMuted.store(false);
+}
+
+void CaptureAudioSource::setOutputForceMuted(bool muted) noexcept
+{
+    outputForceMuted.store(muted);
+}
+
+bool CaptureAudioSource::isOutputForceMuted() const noexcept
+{
+    return outputForceMuted.load();
 }
 
 bool CaptureAudioSource::isCalibrationSignalRunning() const noexcept
@@ -188,18 +205,32 @@ bool CaptureAudioSource::loadPreviewCabinetPackage(const HansoPackage& package, 
     if (! cabinetIrProcessor.loadFromPackage(package, error))
         return false;
 
+    // Optional mic-swap EQ on top of the IR preview; absent matrix = bypass.
+    micColorProcessor.loadFromPackage(package);
     return true;
 }
 
 void CaptureAudioSource::setPreviewMicPositionNormalized(float normalizedPosition) noexcept
 {
     cabinetIrProcessor.setMicPositionNormalized(normalizedPosition);
+    micColorProcessor.setMicPositionNormalized(normalizedPosition);
+}
+
+void CaptureAudioSource::setPreviewCabinetMicClass(CabinetMicClass micClass) noexcept
+{
+    micColorProcessor.setTargetMicClass(micClass);
+}
+
+bool CaptureAudioSource::previewCabinetHasMicMatrix() const noexcept
+{
+    return micColorProcessor.hasMatrix();
 }
 
 void CaptureAudioSource::clearPreviewCabinetPackage() noexcept
 {
     stopPreviewSample();
     cabinetIrProcessor.clear();
+    micColorProcessor.clear();
 }
 
 bool CaptureAudioSource::hasPreviewCabinetPackage() const noexcept
@@ -230,6 +261,7 @@ bool CaptureAudioSource::startPreviewSample() noexcept
     previewProcessor.reset();
     cabinetProcessor.reset();
     cabinetIrProcessor.reset();
+    micColorProcessor.reset();
     previewSamplePlayhead.store(0);
     previewSampleRunning.store(true);
     return true;
@@ -242,6 +274,7 @@ void CaptureAudioSource::stopPreviewSample() noexcept
     previewProcessor.reset();
     cabinetProcessor.reset();
     cabinetIrProcessor.reset();
+    micColorProcessor.reset();
 }
 
 bool CaptureAudioSource::isPreviewSamplePlaying() const noexcept
@@ -547,6 +580,26 @@ void CaptureAudioSource::process(const float* const* inputChannelData,
         }
 
         calibrationPlayhead.store(position);
+
+        // Apply the output level as a per-sample smoothed gain. The probe buffer
+        // is generated at unit reference amplitude, so dragging the slider only
+        // moves this target and ramps smoothly instead of stepping (clicking).
+        const auto targetGain = calibrationOutputGainTarget.load();
+        const auto gainedChannels = (routing == OutputRoutingMode::MonoLeftOnly)
+                                  ? juce::jmin(1, outputBuffer.getNumChannels())
+                                  : outputBuffer.getNumChannels();
+        for (int s = 0; s < numSamples; ++s)
+        {
+            currentCalibrationOutputGain += (targetGain - currentCalibrationOutputGain) * 0.004f;
+            for (int channel = 0; channel < gainedChannels; ++channel)
+                outputBuffer.getWritePointer(channel)[s] *= currentCalibrationOutputGain;
+        }
+
+        // Mute-drop identity window: keep the playhead advancing so timing is
+        // preserved, but emit silence instead of the probe.
+        if (outputForceMuted.load())
+            outputBuffer.clear();
+
         outputPeak = outputBuffer.getMagnitude(0, 0, outputBuffer.getNumSamples());
     }
     else if (previewSampleRunning.load() && previewSampleSignal.getNumSamples() > 0)
@@ -595,6 +648,7 @@ void CaptureAudioSource::process(const float* const* inputChannelData,
         if (cabinetIrProcessor.hasModel())
         {
             cabinetIrProcessor.process(previewInputs, inputChannelsForPreview, outputBuffer, samplesWritten);
+            micColorProcessor.process(outputBuffer, samplesWritten);
         }
         else if (previewProcessor.hasModel())
         {
