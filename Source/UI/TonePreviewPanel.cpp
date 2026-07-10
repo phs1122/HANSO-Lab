@@ -3,6 +3,7 @@
 #include "Analysis/ModelExtractionEngine.h"
 #include "App/Utf8.h"
 #include "Capture/CaptureStepUtils.h"
+#include "Preview/PreviewChainPolicy.h"
 #include "Preview/PreviewSampleLibrary.h"
 #include "Serialization/HansoAudioChunkCodec.h"
 #include "Serialization/HansoModelCodec.h"
@@ -351,6 +352,8 @@ void TonePreviewPanel::loadInitialPreviewModel()
         model = *currentModel;
         previewSourceMode = PreviewSourceMode::AmpModel;
         modelReady = true;
+        capture.setPreviewCabinetEnabled(
+            previewComplementCabDefaultForCaptureType(appState.captureWizard().captureType));
         observedPreviewRevision = capture.previewModelRevision();
         applyPreviewControlLabels();
         modelLabel.setText(model.summary(), juce::dontSendNotification);
@@ -384,6 +387,8 @@ void TonePreviewPanel::loadModelFromPackage()
 
     capture.loadPreviewModel(model);
     capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
+    capture.setPreviewCabinetEnabled(
+        previewComplementCabDefaultForCaptureType(appState.captureWizard().captureType));
     previewSourceMode = PreviewSourceMode::AmpModel;
     observedPreviewRevision = capture.previewModelRevision();
     applyPreviewControlLabels();
@@ -417,7 +422,11 @@ bool TonePreviewPanel::loadModelFromHansoFile(const juce::File& file)
     model = std::move(loadedModel);
     modelReady = capture.loadPreviewModel(model);
     if (modelReady)
+    {
         capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
+        capture.setPreviewCabinetEnabled(previewComplementCabDefaultForPackage(package.metadata.deviceType,
+                                                                               package.metadata.category));
+    }
     previewSourceMode = modelReady ? PreviewSourceMode::AmpModel : PreviewSourceMode::Clean;
     observedPreviewRevision = capture.previewModelRevision();
     observedPreviewCabinetRevision = capture.previewCabinetRevision();
@@ -521,6 +530,8 @@ void TonePreviewPanel::syncModelFromCaptureEngine()
         previewSourceMode = PreviewSourceMode::AmpModel;
         modelReady = true;
         capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
+        capture.setPreviewCabinetEnabled(
+            previewComplementCabDefaultForCaptureType(appState.captureWizard().captureType));
         applyPreviewControlLabels();
         modelLabel.setText(utf8("Current preview tone: ") + model.summary(), juce::dontSendNotification);
     }

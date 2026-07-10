@@ -18,6 +18,7 @@
 #include "Capture/SignalAlignment.h"
 #include "Capture/TestSignalGenerator.h"
 #include "Model/HansoPackage.h"
+#include "Preview/PreviewChainPolicy.h"
 #include "Serialization/HansoAudioChunkCodec.h"
 #include "Serialization/HansoSerializer.h"
 
@@ -326,6 +327,31 @@ void testEstimatedSlotInterpolation()
     check(roundTrip.valid
               && std::abs(roundTrip.bandGainsDb.front() - edge->toneProfile.bandGainsDb.front()) < 0.01f,
           "tone profile serialization round-trips");
+}
+
+void testPreviewChainPolicy()
+{
+    using hanso::CaptureType;
+    check(hanso::previewComplementCabDefaultForCaptureType(CaptureType::Amp)
+              && hanso::previewComplementCabDefaultForCaptureType(CaptureType::PreAmp),
+          "amp head and preamp previews attach the complement cab");
+    check(! hanso::previewComplementCabDefaultForCaptureType(CaptureType::FullRig)
+              && ! hanso::previewComplementCabDefaultForCaptureType(CaptureType::Pedal)
+              && ! hanso::previewComplementCabDefaultForCaptureType(CaptureType::Effect)
+              && ! hanso::previewComplementCabDefaultForCaptureType(CaptureType::Cabinet),
+          "full rig, pedal, and cabinet previews stay uncolored");
+
+    using hanso::HansoCategory;
+    check(hanso::previewComplementCabDefaultForPackage("Amp", HansoCategory::Amp)
+              && hanso::previewComplementCabDefaultForPackage("PreAmp", HansoCategory::Amp),
+          "amp/preamp packages default to complement cab");
+    check(! hanso::previewComplementCabDefaultForPackage("FullRig", HansoCategory::Rig)
+              && ! hanso::previewComplementCabDefaultForPackage("Pedal", HansoCategory::Pedal),
+          "full rig / pedal packages default to no complement cab");
+    check(! hanso::previewComplementCabDefaultForPackage("", HansoCategory::Rig),
+          "device-type-less rig package falls back to category");
+    check(hanso::previewComplementCabDefaultForPackage("", HansoCategory::Unknown),
+          "unknown package keeps legacy cab-on default");
 }
 
 void testSerializerReExportOverwrites()
@@ -941,6 +967,7 @@ int main()
     testCabinetMicMatrixEstimator();
     testCabinetCaptureMicMetadata();
     testPreviewMicColorProcessor();
+    testPreviewChainPolicy();
     testSerializerReExportOverwrites();
     testQualityAnalyzer();
     testCalibrationValidator();
