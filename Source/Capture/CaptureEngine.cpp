@@ -9,6 +9,7 @@
 #include "Capture/CaptureStepUtils.h"
 #include "Preview/PreviewSampleLibrary.h"
 #include "Serialization/HansoAudioChunkCodec.h"
+#include "Serialization/HansoSerializer.h"
 
 namespace hanso
 {
@@ -1437,6 +1438,54 @@ void CaptureEngine::setPreviewMicPositionPercent(float percent)
 void CaptureEngine::setPreviewCabinetMicClass(CabinetMicClass micClass)
 {
     audio.captureSource().setPreviewCabinetMicClass(micClass);
+}
+
+bool CaptureEngine::loadPreviewComplementCabFile(const juce::File& file)
+{
+    HansoPackage package;
+    juce::String error;
+    if (! HansoSerializer::readFromFile(file, package, error))
+    {
+        appState.appendLog("Complement cab could not be read: " + error);
+        return false;
+    }
+
+    if (package.cabinetProfile.isVoid())
+    {
+        appState.appendLog("Complement cab rejected: " + file.getFileName()
+                           + " has no cabProfile (not a cabinet package).");
+        return false;
+    }
+
+    if (! audio.captureSource().loadPreviewComplementCabPackage(package, error))
+    {
+        appState.appendLog("Complement cab could not be loaded: " + error);
+        return false;
+    }
+
+    appState.appendLog("Complement cab loaded: "
+                       + audio.captureSource().previewComplementCabSummary());
+    return true;
+}
+
+void CaptureEngine::setPreviewComplementCabUseCustom(bool useCustom)
+{
+    audio.captureSource().setPreviewComplementCabUseCustom(useCustom);
+}
+
+bool CaptureEngine::previewComplementCabUseCustom() const noexcept
+{
+    return audio.captureSource().previewComplementCabUseCustom();
+}
+
+bool CaptureEngine::hasPreviewComplementCabPackage() const noexcept
+{
+    return audio.captureSource().hasPreviewComplementCabPackage();
+}
+
+juce::String CaptureEngine::previewComplementCabSummary() const
+{
+    return audio.captureSource().previewComplementCabSummary();
 }
 
 bool CaptureEngine::previewCabinetHasMicMatrix() const noexcept

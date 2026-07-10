@@ -75,6 +75,13 @@ public:
     void setPreviewMicPositionPercent(float percent);
     void setPreviewCabinetMicClass(CabinetMicClass micClass);
     bool previewCabinetHasMicMatrix() const noexcept;
+    // Complement cab for model previews: user-chosen cabinet .hanso (IR) as
+    // an alternative to the built-in standard EQ. Session-scoped.
+    bool loadPreviewComplementCabFile(const juce::File& file);
+    void setPreviewComplementCabUseCustom(bool useCustom);
+    bool previewComplementCabUseCustom() const noexcept;
+    bool hasPreviewComplementCabPackage() const noexcept;
+    juce::String previewComplementCabSummary() const;
     void clearPreviewCabinetPackage();
     bool hasPreviewCabinetPackage() const noexcept;
     int previewCabinetRevision() const noexcept;

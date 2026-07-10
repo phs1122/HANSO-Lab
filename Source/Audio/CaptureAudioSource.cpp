@@ -7,6 +7,7 @@ void CaptureAudioSource::prepare(double sampleRate, int maximumBlockSize, int ou
     previewProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
     cabinetProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
     cabinetIrProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
+    complementCabIrProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
     micColorProcessor.prepare(sampleRate, outputChannels);
     previewScratchBuffer.setSize(juce::jmax(1, outputChannels),
                                  juce::jmax(1, maximumBlockSize),
@@ -221,6 +222,37 @@ void CaptureAudioSource::setPreviewCabinetMicClass(CabinetMicClass micClass) noe
     micColorProcessor.setTargetMicClass(micClass);
 }
 
+bool CaptureAudioSource::loadPreviewComplementCabPackage(const HansoPackage& package, juce::String& error)
+{
+    if (! complementCabIrProcessor.loadFromPackage(package, error))
+        return false;
+
+    // Cap edge is the neutral default position for the complement cab.
+    complementCabIrProcessor.setMicPositionNormalized(0.33f);
+    complementCabUseCustom.store(true);
+    return true;
+}
+
+void CaptureAudioSource::setPreviewComplementCabUseCustom(bool useCustom) noexcept
+{
+    complementCabUseCustom.store(useCustom && complementCabIrProcessor.hasModel());
+}
+
+bool CaptureAudioSource::previewComplementCabUseCustom() const noexcept
+{
+    return complementCabUseCustom.load() && complementCabIrProcessor.hasModel();
+}
+
+bool CaptureAudioSource::hasPreviewComplementCabPackage() const noexcept
+{
+    return complementCabIrProcessor.hasModel();
+}
+
+juce::String CaptureAudioSource::previewComplementCabSummary() const
+{
+    return complementCabIrProcessor.summary();
+}
+
 bool CaptureAudioSource::previewCabinetHasMicMatrix() const noexcept
 {
     return micColorProcessor.hasMatrix();
@@ -261,6 +293,7 @@ bool CaptureAudioSource::startPreviewSample() noexcept
     previewProcessor.reset();
     cabinetProcessor.reset();
     cabinetIrProcessor.reset();
+    complementCabIrProcessor.reset();
     micColorProcessor.reset();
     previewSamplePlayhead.store(0);
     previewSampleRunning.store(true);
@@ -274,6 +307,7 @@ void CaptureAudioSource::stopPreviewSample() noexcept
     previewProcessor.reset();
     cabinetProcessor.reset();
     cabinetIrProcessor.reset();
+    complementCabIrProcessor.reset();
     micColorProcessor.reset();
 }
 
@@ -654,7 +688,26 @@ void CaptureAudioSource::process(const float* const* inputChannelData,
         {
             previewProcessor.process(previewInputs, inputChannelsForPreview, outputBuffer);
             if (previewCabinetEnabled.load())
-                cabinetProcessor.process(outputBuffer, samplesWritten);
+            {
+                if (complementCabUseCustom.load() && complementCabIrProcessor.hasModel())
+                {
+                    // The convolution copies input to output, so route through
+                    // the scratch buffer (its sample-input contents are no
+                    // longer needed at this point in the block).
+                    const auto channels = juce::jmin(previewScratchBuffer.getNumChannels(),
+                                                     outputBuffer.getNumChannels());
+                    for (int channel = 0; channel < channels; ++channel)
+                        previewScratchBuffer.copyFrom(channel, 0, outputBuffer, channel, 0, samplesWritten);
+                    complementCabIrProcessor.process(previewScratchBuffer.getArrayOfReadPointers(),
+                                                     channels,
+                                                     outputBuffer,
+                                                     samplesWritten);
+                }
+                else
+                {
+                    cabinetProcessor.process(outputBuffer, samplesWritten);
+                }
+            }
         }
         else
         {

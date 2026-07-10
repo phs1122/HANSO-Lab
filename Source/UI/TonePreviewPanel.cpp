@@ -104,6 +104,13 @@ TonePreviewPanel::TonePreviewPanel(ApplicationState& state, CaptureEngine& captu
         capture.setPreviewCabinetMicClass(micClass);
     };
     addAndMakeVisible(previewMicBox);
+
+    cabSourceBox.addItem("Cab: Standard EQ", 1);
+    cabSourceBox.addItem(utf8("Cab: Custom .hanso…"), 2);
+    cabSourceBox.setSelectedId(1, juce::dontSendNotification);
+    cabSourceBox.setTooltip(utf8("보완 캐비넷의 소스입니다. Standard EQ는 내장 캡 시뮬, Custom은 캐비넷 .hanso의 IR 컨볼루션을 사용합니다."));
+    cabSourceBox.onChange = [this] { handleCabSourceSelection(); };
+    addAndMakeVisible(cabSourceBox);
     volumeSlider.setRange(-24.0, 12.0, 0.1);
     volumeSlider.setValue(capture.previewOutputGainDb(), juce::dontSendNotification);
     volumeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 70, 22);
@@ -178,7 +185,9 @@ void TonePreviewPanel::resized()
     gainRow.removeFromLeft(90);
     gainSlider.setBounds(gainRow.removeFromLeft(420).reduced(0, 4));
     gainRow.removeFromLeft(12);
-    previewMicBox.setBounds(gainRow.removeFromLeft(160).reduced(0, 5));
+    const auto modeBoxArea = gainRow.removeFromLeft(160).reduced(0, 5);
+    previewMicBox.setBounds(modeBoxArea);
+    cabSourceBox.setBounds(modeBoxArea);
 
     area.removeFromTop(12);
     auto buttonRow = area.removeFromTop(36);
@@ -265,13 +274,48 @@ void TonePreviewPanel::applyPreviewControlLabels()
         gainSlider.setTextValueSuffix("% Mic");
         ampLabel.setText("HANSO CAB\nMic Position", juce::dontSendNotification);
         previewMicBox.setVisible(true);
+        cabSourceBox.setVisible(false);
     }
     else
     {
         gainSlider.setTextValueSuffix("% Gain");
         ampLabel.setText("HANSO AMP\nPreview Cabinet", juce::dontSendNotification);
         previewMicBox.setVisible(false);
+        cabSourceBox.setVisible(previewSourceMode == PreviewSourceMode::AmpModel);
     }
+}
+
+void TonePreviewPanel::handleCabSourceSelection()
+{
+    if (cabSourceBox.getSelectedId() == 1)
+    {
+        capture.setPreviewComplementCabUseCustom(false);
+        return;
+    }
+
+    // Custom: reuse an already-loaded cab or ask for one.
+    if (capture.hasPreviewComplementCabPackage())
+    {
+        capture.setPreviewComplementCabUseCustom(true);
+        return;
+    }
+
+    complementCabChooser = std::make_unique<juce::FileChooser>("Choose complement cabinet HANSO",
+                                                               juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
+                                                               "*.hanso");
+    complementCabChooser->launchAsync(juce::FileBrowserComponent::openMode
+                                          | juce::FileBrowserComponent::canSelectFiles,
+        [this](const juce::FileChooser& chooser)
+        {
+            const auto file = chooser.getResult();
+            const auto loaded = file != juce::File() && capture.loadPreviewComplementCabFile(file);
+            if (! loaded)
+                cabSourceBox.setSelectedId(1, juce::dontSendNotification);
+
+            capture.setPreviewComplementCabUseCustom(loaded);
+            complementCabChooser = nullptr;
+            updateButtonState();
+        });
 }
 
 void TonePreviewPanel::refreshChainStrip()
@@ -299,9 +343,16 @@ void TonePreviewPanel::refreshChainStrip()
             blocks.push_back({ "Power", "Neutral", Kind::Complement });
 
         if (capture.isPreviewCabinetEnabled())
-            blocks.push_back({ "Cab", utf8("Standard EQ · 보완"), Kind::Complement });
+        {
+            const auto subtitle = capture.previewComplementCabUseCustom()
+                                ? capture.previewComplementCabSummary() + utf8(" · 보완")
+                                : utf8("Standard EQ · 보완");
+            blocks.push_back({ "Cab", subtitle, Kind::Complement });
+        }
         else if (deviceLabel == "Pedal" || deviceLabel == "Effect")
+        {
             blocks.push_back({ "Out chain", "FRFR", Kind::Complement });
+        }
     }
     else
     {
@@ -772,6 +823,11 @@ void TonePreviewPanel::updateButtonState()
     cabinetButton.setEnabled(modelReady && previewSourceMode == PreviewSourceMode::AmpModel);
     previewMicBox.setEnabled(previewSourceMode == PreviewSourceMode::CabinetPackage
                              && capture.previewCabinetHasMicMatrix());
+    cabSourceBox.setEnabled(previewSourceMode == PreviewSourceMode::AmpModel
+                            && capture.isPreviewCabinetEnabled());
+    if (! cabSourceBox.isPopupActive() && complementCabChooser == nullptr)
+        cabSourceBox.setSelectedId(capture.previewComplementCabUseCustom() ? 2 : 1,
+                                   juce::dontSendNotification);
     realCaptureButton.setEnabled(previewSourceMode == PreviewSourceMode::AmpModel
                                  && realCaptureChunkIdForSelection().isNotEmpty());
     loopButton.setToggleState(capture.isPreviewLoopEnabled(), juce::dontSendNotification);

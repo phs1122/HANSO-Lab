@@ -70,6 +70,13 @@ public:
     bool isPreviewNormalizationEnabled() const noexcept;
     void setPreviewCabinetEnabled(bool enabled) noexcept;
     bool isPreviewCabinetEnabled() const noexcept;
+    // Complement cab source for model previews: built-in EQ (default) or a
+    // user-chosen cabinet .hanso rendered by IR convolution.
+    bool loadPreviewComplementCabPackage(const HansoPackage& package, juce::String& error);
+    void setPreviewComplementCabUseCustom(bool useCustom) noexcept;
+    bool previewComplementCabUseCustom() const noexcept;
+    bool hasPreviewComplementCabPackage() const noexcept;
+    juce::String previewComplementCabSummary() const;
     bool hasPreviewModel() const noexcept;
     juce::String previewModelSummary() const;
     float inputLevel() const noexcept;
@@ -95,7 +102,9 @@ private:
     PreviewModelProcessor previewProcessor;
     PreviewCabinetProcessor cabinetProcessor;
     PreviewCabinetIrProcessor cabinetIrProcessor;
+    PreviewCabinetIrProcessor complementCabIrProcessor;
     PreviewMicColorProcessor micColorProcessor;
+    std::atomic<bool> complementCabUseCustom { false };
     std::atomic<int> playhead { 0 };
     std::atomic<int> calibrationPlayhead { 0 };
     std::atomic<float> calibrationOutputGainTarget { 1.0f };

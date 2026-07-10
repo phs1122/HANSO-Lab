@@ -48,6 +48,7 @@ private:
     bool isCabinetPackage(const HansoPackage& package) const noexcept;
     void applyPreviewControlLabels();
     void refreshChainStrip();
+    void handleCabSourceSelection();
     bool loadCompactModelChunk(HansoPackage& package,
                                const juce::File& sourceFile,
                                CompactHansoModel& destination,
@@ -92,6 +93,9 @@ private:
     juce::Slider gainSlider;
     // Cabinet package mode only: mic-swap EQ preview from cabProfile.micMatrix.
     juce::ComboBox previewMicBox;
+    // Amp-model mode only: complement cab source (standard EQ / custom .hanso IR).
+    juce::ComboBox cabSourceBox;
+    std::unique_ptr<juce::FileChooser> complementCabChooser;
     juce::ListBox sampleList { "Preview Samples", this };
     juce::TextButton playButton { "Play" };
     juce::TextButton stopButton { "Stop" };
