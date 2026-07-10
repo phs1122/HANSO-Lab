@@ -10,6 +10,7 @@ void CaptureAudioSource::prepare(double sampleRate, int maximumBlockSize, int ou
     cabinetIrProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
     complementCabIrProcessor.prepare(sampleRate, maximumBlockSize, outputChannels);
     micColorProcessor.prepare(sampleRate, outputChannels);
+    micDistanceProcessor.prepare(sampleRate, outputChannels);
     previewScratchBuffer.setSize(juce::jmax(1, outputChannels),
                                  juce::jmax(1, maximumBlockSize),
                                  false,
@@ -246,6 +247,11 @@ void CaptureAudioSource::setPreviewMicPositionNormalized(float normalizedPositio
     micColorProcessor.setMicPositionNormalized(normalizedPosition);
 }
 
+void CaptureAudioSource::setPreviewCabinetMicDistanceCm(float distanceCm) noexcept
+{
+    micDistanceProcessor.setDistanceCm(distanceCm);
+}
+
 void CaptureAudioSource::setPreviewCabinetMicClass(CabinetMicClass micClass) noexcept
 {
     micColorProcessor.setTargetMicClass(micClass);
@@ -292,6 +298,7 @@ void CaptureAudioSource::clearPreviewCabinetPackage() noexcept
     stopPreviewSample();
     cabinetIrProcessor.clear();
     micColorProcessor.clear();
+    micDistanceProcessor.reset();
 }
 
 bool CaptureAudioSource::hasPreviewCabinetPackage() const noexcept
@@ -325,6 +332,7 @@ bool CaptureAudioSource::startPreviewSample() noexcept
     cabinetIrProcessor.reset();
     complementCabIrProcessor.reset();
     micColorProcessor.reset();
+    micDistanceProcessor.reset();
     previewSamplePlayhead.store(0);
     previewSampleRunning.store(true);
     return true;
@@ -340,6 +348,7 @@ void CaptureAudioSource::stopPreviewSample() noexcept
     cabinetIrProcessor.reset();
     complementCabIrProcessor.reset();
     micColorProcessor.reset();
+    micDistanceProcessor.reset();
 }
 
 bool CaptureAudioSource::isPreviewSamplePlaying() const noexcept
@@ -756,6 +765,7 @@ void CaptureAudioSource::process(const float* const* inputChannelData,
                                        outputBuffer,
                                        samplesWritten);
             micColorProcessor.process(outputBuffer, samplesWritten);
+            micDistanceProcessor.process(outputBuffer, samplesWritten);
         }
         else if (previewCabinetEnabled.load())
         {

@@ -413,6 +413,24 @@ void CaptureWizardState::estimateEmptyCabinetSlots()
     std::sort(anchors.begin(), anchors.end(),
               [](const Anchor& a, const Anchor& b) { return a.position < b.position; });
 
+    // The matrix preserves the known mic and positional colour separately.
+    // Use it for an estimated slot whenever possible instead of merely copying
+    // the nearest IR profile; this gives Cone/Cone Edge/Edge/Off-Axis their
+    // own calculated tone even with a single real source.
+    const auto micMatrix = CabinetMicMatrixEstimator::estimate(cabinetSlots);
+    const auto profileForMatrixPosition = [&micMatrix](const juce::String& positionId,
+                                                       CabinetMicClass micClass) -> const CabinetToneProfile*
+    {
+        const auto effectiveMic = micClass == CabinetMicClass::Unknown
+                                ? CabinetMicClass::Dynamic
+                                : micClass;
+        for (const auto& entry : micMatrix.entries)
+            if (entry.positionId == positionId && entry.micClass == effectiveMic && entry.toneProfile.valid)
+                return &entry.toneProfile;
+
+        return nullptr;
+    };
+
     auto interpolatedCount = 0;
     for (auto& slot : cabinetSlots)
     {
@@ -425,28 +443,41 @@ void CaptureWizardState::estimateEmptyCabinetSlots()
         if (! anchors.empty())
         {
             const auto position = normalizedPositionForCabinetId(slot.id);
-            const Anchor* below = nullptr;
-            const Anchor* above = nullptr;
+            const Anchor* nearest = &anchors.front();
             for (const auto& anchor : anchors)
-            {
-                if (anchor.position <= position)
-                    below = &anchor;
-                if (anchor.position >= position && above == nullptr)
-                    above = &anchor;
-            }
+                if (std::abs(anchor.position - position) < std::abs(nearest->position - position))
+                    nearest = &anchor;
 
-            if (below != nullptr && above != nullptr && below != above)
+            if (const auto* matrixProfile = profileForMatrixPosition(slot.id, nearest->slot->micClass))
             {
-                const auto range = juce::jmax(0.001f, above->position - below->position);
-                slot.toneProfile = CabinetToneProfile::interpolate(below->slot->toneProfile,
-                                                                   above->slot->toneProfile,
-                                                                   (position - below->position) / range);
+                slot.toneProfile = *matrixProfile;
+                slot.toneProfile.estimated = true;
             }
             else
             {
-                const auto* nearest = below != nullptr ? below : above;
-                slot.toneProfile = nearest->slot->toneProfile;
-                slot.toneProfile.estimated = true;
+                const Anchor* below = nullptr;
+                const Anchor* above = nullptr;
+                for (const auto& anchor : anchors)
+                {
+                    if (anchor.position <= position)
+                        below = &anchor;
+                    if (anchor.position >= position && above == nullptr)
+                        above = &anchor;
+                }
+
+                if (below != nullptr && above != nullptr && below != above)
+                {
+                    const auto range = juce::jmax(0.001f, above->position - below->position);
+                    slot.toneProfile = CabinetToneProfile::interpolate(below->slot->toneProfile,
+                                                                       above->slot->toneProfile,
+                                                                       (position - below->position) / range);
+                }
+                else
+                {
+                    const auto* closest = below != nullptr ? below : above;
+                    slot.toneProfile = closest->slot->toneProfile;
+                    slot.toneProfile.estimated = true;
+                }
             }
 
             ++interpolatedCount;

@@ -49,7 +49,7 @@ juce::String workflowDescription(const CaptureWizardState& wizard)
 {
     if (wizard.captureType == CaptureType::Cabinet)
     {
-        return utf8("캐비넷 캡쳐\nCenter / Edge / Cone / Off-Axis 슬롯 중 원하는 위치를 직접 캡쳐하거나 IR로 가져올 수 있습니다.\n비워둔 위치는 Finish 단계에서 실제 source를 기반으로 추정됩니다.");
+        return utf8("캐비넷 캡쳐\nCone / Cone Edge / Edge / Off-Axis 슬롯 중 원하는 위치를 직접 캡쳐하거나 IR로 가져올 수 있습니다.\n비워둔 위치는 Finish 단계에서 실제 source와 포지션 색채 커브를 기반으로 추정됩니다.");
     }
 
     return modeDescription(wizard.mode);
@@ -356,7 +356,6 @@ void CapturePanel::rebuildStepRows()
     stepIcons.clear(true);
     stepButtons.clear(true);
     stepStartButtons.clear(true);
-    stepRecaptureButtons.clear(true);
     stepStopButtons.clear(true);
     stepResetButtons.clear(true);
     stepImportButtons.clear(true);
@@ -384,17 +383,6 @@ void CapturePanel::rebuildStepRows()
         };
         addAndMakeVisible(start);
         stepStartButtons.add(start);
-
-        auto* recapture = new juce::TextButton("Re-Capture");
-        recapture->onClick = [this, id = step.stepId]
-        {
-            selectStep(id);
-            showBusyOverlay("Capturing...", "Re-capturing this slot.", false);
-            capture.startCaptureStep(id);
-            syncWizardUi();
-        };
-        addAndMakeVisible(recapture);
-        stepRecaptureButtons.add(recapture);
 
         auto* stop = new juce::TextButton("Stop");
         stop->onClick = [this] { capture.stop(); hideBusyOverlay(); syncWizardUi(); };
@@ -478,8 +466,6 @@ void CapturePanel::resized()
         stepButtons[i]->setBounds(row.removeFromLeft(190).reduced(0, 2));
         row.removeFromLeft(8);
         stepStartButtons[i]->setBounds(row.removeFromLeft(76).reduced(0, 2));
-        row.removeFromLeft(6);
-        stepRecaptureButtons[i]->setBounds(row.removeFromLeft(94).reduced(0, 2));
         row.removeFromLeft(6);
         stepStopButtons[i]->setBounds(row.removeFromLeft(54).reduced(0, 2));
         row.removeFromLeft(6);
@@ -636,7 +622,6 @@ void CapturePanel::paintOverChildren(juce::Graphics& g)
         drawDebugBounds(g, *stepIcons[i], "stepIcon" + juce::String(i + 1), juce::Colours::lime);
         drawDebugBounds(g, *stepButtons[i], "step" + juce::String(i + 1), juce::Colours::lime);
         drawDebugBounds(g, *stepStartButtons[i], "start" + juce::String(i + 1), juce::Colours::limegreen);
-        drawDebugBounds(g, *stepRecaptureButtons[i], "recap" + juce::String(i + 1), juce::Colours::limegreen);
         drawDebugBounds(g, *stepStopButtons[i], "stop" + juce::String(i + 1), juce::Colours::limegreen);
         drawDebugBounds(g, *stepResetButtons[i], "reset" + juce::String(i + 1), juce::Colours::limegreen);
         drawDebugBounds(g, *stepImportButtons[i], "import" + juce::String(i + 1), juce::Colours::limegreen);
@@ -1305,36 +1290,37 @@ void CapturePanel::updateStepActions()
         const auto& step = wizard.recipe.steps[static_cast<size_t>(i)];
         const auto isGain = isGainCaptureStep(step);
         const auto isCabSlot = isCabinetPositionStep(step);
-        const auto completed = isComplete(step.status);
         const auto isActiveGain = audioStepsUnlocked && step.stepId == activeGainStepId;
         const auto isRecordingThisStep = activeRecordingStepId == step.stepId;
         const auto hasCaptureData = wizard.findResult(step.stepId) != nullptr;
         const auto hasCabinetData = isCabSlot
                                  && wizard.findCabinetSlot(step.stepId) != nullptr
                                  && wizard.findCabinetSlot(step.stepId)->hasAnyData();
-        const auto showAmpCaptureActions = isGain && audioStepsUnlocked && (completed || isActiveGain || isRecordingThisStep);
-        const auto showCabinetCaptureActions = isCabSlot && audioStepsUnlocked;
-        const auto showCaptureActions = showAmpCaptureActions || showCabinetCaptureActions;
+        const auto isCaptureStep = isGain || isCabSlot;
+        const auto calibrationLocked = isCaptureStep && ! audioStepsUnlocked;
 
-        stepStartButtons[i]->setVisible(showCaptureActions);
-        stepRecaptureButtons[i]->setVisible(showCaptureActions);
-        stepStopButtons[i]->setVisible(showCaptureActions);
-        stepImportButtons[i]->setVisible(showCabinetCaptureActions);
-        stepResetButtons[i]->setVisible((isGain && hasCaptureData) || (isCabSlot && hasCabinetData));
+        // Keep the action layout stable throughout the wizard. Before
+        // calibration, capture actions remain visible but disabled instead of
+        // disappearing, so the next required action is apparent at a glance.
+        stepStartButtons[i]->setVisible(isCaptureStep);
+        stepStopButtons[i]->setVisible(isCaptureStep);
+        stepImportButtons[i]->setVisible(isCabSlot);
+        stepResetButtons[i]->setVisible(isCaptureStep);
         stepResetButtons[i]->setEnabled((isGain && hasCaptureData) || (isCabSlot && hasCabinetData));
 
         const auto captureControlsEnabled = (isGain && (isActiveGain || isRecordingThisStep))
                                          || (isCabSlot && audioStepsUnlocked);
         stepStartButtons[i]->setEnabled(captureControlsEnabled && ! isRecordingThisStep);
-        stepRecaptureButtons[i]->setEnabled(captureControlsEnabled
-                                            && ! isRecordingThisStep
-                                            && ((isGain && (step.status == CaptureStepStatus::Failed
-                                                           || step.status == CaptureStepStatus::Warning))
-                                                || (isCabSlot && hasCabinetData)));
         stepStopButtons[i]->setEnabled(isRecordingThisStep);
         stepImportButtons[i]->setEnabled(isCabSlot
                                          && audioStepsUnlocked
                                          && capture.state() != CaptureSessionState::Recording);
+
+        const auto calibrationTooltip = utf8("Calibration을 진행해주세요");
+        stepStartButtons[i]->setTooltip(calibrationLocked ? calibrationTooltip : juce::String());
+        stepStopButtons[i]->setTooltip(calibrationLocked ? calibrationTooltip : juce::String());
+        stepImportButtons[i]->setTooltip(calibrationLocked ? calibrationTooltip : juce::String());
+        stepResetButtons[i]->setTooltip(calibrationLocked ? calibrationTooltip : juce::String());
     }
 }
 }

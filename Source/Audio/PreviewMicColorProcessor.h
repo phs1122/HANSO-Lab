@@ -12,11 +12,10 @@
 
 namespace hanso
 {
-// Preview-only mic swap EQ for cabinet packages. Reads cabProfile.micMatrix
-// and applies the band-gain difference between the selected target mic class
-// and each position's reference mic on top of the IR preview output. With no
-// matrix loaded or the target set to the original mic it is a strict bypass,
-// so the protected IR preview path is unchanged by default.
+// Cabinet tone-profile renderer for the IR preview path. It calculates the
+// delta from the real IR(s) selected for convolution to the requested mic
+// position/mic-class profile. This lets an estimated slot remain audible even
+// though it has no standalone IR chunk.
 class PreviewMicColorProcessor final
 {
 public:
@@ -24,11 +23,12 @@ public:
     void reset() noexcept;
     void clear() noexcept;
 
-    // Parses cabProfile.micMatrix and positions[].micClass. Returns false and
-    // stays inactive when the package carries no matrix (older packages).
+    // Parses cabProfile.positions and optional micMatrix. Older cabinet
+    // packages without the matrix retain their real-IR behaviour.
     bool loadFromPackage(const HansoPackage& package);
 
-    // Unknown selects the original (per-position reference) mic = bypass.
+    // Unknown keeps the source microphone class while still applying the
+    // selected position's calculated profile.
     void setTargetMicClass(CabinetMicClass micClass) noexcept;
     void setMicPositionNormalized(float normalizedPosition) noexcept;
     bool hasMatrix() const noexcept;
@@ -64,29 +64,36 @@ private:
     static constexpr int maxChannels = 2;
     static constexpr int classCount = 3; // Dynamic, Ribbon, Condenser
 
-    struct PositionDeltas
+    struct ProfileAnchor
     {
         float normalizedPosition { 0.0f };
-        // [target class][band] band-gain delta vs the position's reference mic.
-        std::array<std::array<float, static_cast<size_t>(cabinetToneBandCount)>, classCount> bandDeltasDb {};
-        std::array<float, classCount> levelDeltasDb {};
+        CabinetToneProfile profile;
+        CabinetMicClass micClass { CabinetMicClass::Unknown };
     };
 
     static BiquadCoefficients makePeak(double sampleRate, double frequencyHz, float q, float gainDb) noexcept;
-    void interpolateDeltas(float normalizedPosition,
-                           int classIndex,
-                           std::array<float, static_cast<size_t>(cabinetToneBandCount)>& bandsDb,
-                           float& levelDb) const noexcept;
+    static bool interpolateProfile(const std::vector<ProfileAnchor>& anchors,
+                                   float normalizedPosition,
+                                   CabinetToneProfile& destination,
+                                   CabinetMicClass* nearestMicClass = nullptr) noexcept;
+    bool targetProfileFor(float normalizedPosition,
+                          CabinetMicClass sourceMicClass,
+                          int requestedClassIndex,
+                          CabinetToneProfile& destination) const noexcept;
     void rebuildCoefficientsIfNeeded() noexcept;
 
     double sampleRate { 48000.0 };
     int preparedChannels { 2 };
-    std::vector<PositionDeltas> positionDeltas;
+    std::vector<ProfileAnchor> sourceProfiles;
+    std::vector<ProfileAnchor> positionProfiles;
+    std::array<std::vector<ProfileAnchor>, classCount> matrixProfiles;
+    std::atomic<bool> profileDataLoaded { false };
     std::atomic<bool> matrixLoaded { false };
-    std::atomic<int> targetClassIndex { -1 }; // -1 = original mic (bypass)
+    std::atomic<int> targetClassIndex { -1 }; // -1 = source/original mic
     std::atomic<float> micPositionNormalized { 0.0f };
     int loadedClassIndex { -2 };
     float loadedPosition { -1.0f };
+    bool profileCorrectionActive { false }; // audio thread only
     float targetLevelGainLinear { 1.0f };
     float currentLevelGainLinear { 1.0f };
     std::array<BiquadCoefficients, static_cast<size_t>(cabinetToneBandCount)> coefficients {};

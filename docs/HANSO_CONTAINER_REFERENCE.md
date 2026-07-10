@@ -83,7 +83,7 @@ Cabinet 패키지의 `cabProfile`은 다음 additive 필드를 가질 수 있다
 
 - `positions[].micClass` — real source slot의 마이크 클래스 (`dynamic` / `ribbon` / `condenser`, 미상이면 void)
 - `positions[].micModel` — 자유 텍스트 마이크 모델명 (미입력 시 void)
-- `micMatrix` — real source slot의 알려진 마이크/위치 색채를 디임베딩하여 모든 (마이크 클래스 × 위치) 조합의 tone profile을 재합성한 매트릭스. `source: "measured"` 항목은 실측 slot의 profile을 그대로 쓴다. 소비자는 이 필드를 optional로 취급해야 한다.
+- `micMatrix` — real source slot의 알려진 마이크/포지션 색채를 디임베딩하여 모든 (마이크 클래스 × 포지션) 조합의 tone profile을 재합성한 매트릭스. 포지션은 `Cone` / `Cone Edge` / `Edge` / `Off-Axis`이며, `source: "measured"` 항목은 실측 slot의 profile을 그대로 쓴다. 소비자는 이 필드를 optional로 취급해야 한다.
 
 색채 커브 정본은 `Source/Analysis/MicColorationProfiles.*`이며, HANSO TONE의 `hst_fx/CabinetProfiles.h` 파라메트릭 정의를 미러링한다. 어느 한쪽 커브를 바꾸면 같은 변경에서 다른 쪽도 갱신한다 (통합 단계에서 공유 모듈로 단일화 예정).
 

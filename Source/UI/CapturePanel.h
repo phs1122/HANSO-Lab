@@ -70,7 +70,6 @@ private:
     juce::OwnedArray<CaptureStatusIcon> stepIcons;
     juce::OwnedArray<juce::TextButton> stepButtons;
     juce::OwnedArray<juce::TextButton> stepStartButtons;
-    juce::OwnedArray<juce::TextButton> stepRecaptureButtons;
     juce::OwnedArray<juce::TextButton> stepStopButtons;
     juce::OwnedArray<juce::TextButton> stepResetButtons;
     juce::OwnedArray<juce::TextButton> stepImportButtons;

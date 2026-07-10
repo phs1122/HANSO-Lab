@@ -27,7 +27,7 @@ public:
 
     // Band-averaged response of a mic-position slot's EQ chain
     // (low shelf, mid peak, high shelf, high cut). The index follows the
-    // kCabinetMicPositions order: 0 Center, 1 Edge, 2 Cone, 3 Off-Axis.
+    // kCabinetMicPositions order: 0 Cone, 1 Cone Edge, 2 Edge, 3 Off-Axis.
     static CabinetToneBandArray positionColorationBandsDb(int positionIndex);
 
     // Broadband gain trim applied by the position preset (dB).

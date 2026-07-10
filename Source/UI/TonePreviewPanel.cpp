@@ -1,13 +1,17 @@
 #include "UI/TonePreviewPanel.h"
 
 #include "Analysis/ModelExtractionEngine.h"
+#include "Audio/PreviewMicDistanceProcessor.h"
 #include "App/Utf8.h"
+#include "Capture/CabinetMicPositions.h"
 #include "Capture/CaptureStepUtils.h"
 #include "Preview/PreviewChainPolicy.h"
 #include "Preview/PreviewSampleLibrary.h"
 #include "Serialization/HansoAudioChunkCodec.h"
 #include "Serialization/HansoModelCodec.h"
 #include "Serialization/HansoSerializer.h"
+
+#include <cmath>
 
 namespace hanso
 {
@@ -59,15 +63,29 @@ TonePreviewPanel::TonePreviewPanel(ApplicationState& state, CaptureEngine& captu
     gainSlider.onValueChange = [this] { updateGainModel(); };
     addAndMakeVisible(gainSlider);
 
-    micPositionSlider.setRange(0.0, 100.0, 1.0);
-    micPositionSlider.setValue(33.0, juce::dontSendNotification);
-    micPositionSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 74, 24);
-    micPositionSlider.setTextValueSuffix("% Mic");
-    micPositionSlider.onValueChange = [this]
+    micDistanceSlider.setRange(PreviewMicDistanceProcessor::minimumDistanceCm,
+                               PreviewMicDistanceProcessor::maximumDistanceCm,
+                               0.5);
+    micDistanceSlider.setValue(PreviewMicDistanceProcessor::referenceDistanceCm,
+                               juce::dontSendNotification);
+    micDistanceSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 74, 24);
+    micDistanceSlider.setTextValueSuffix(" cm Distance");
+    micDistanceSlider.setTooltip(utf8("선택한 포지션에서 캐비넷 면과 마이크 사이의 거리입니다. 거리가 늘면 레벨과 고역이 감쇠합니다."));
+    micDistanceSlider.onValueChange = [this]
     {
-        capture.setPreviewMicPositionPercent(static_cast<float>(micPositionSlider.getValue()));
+        capture.setPreviewCabinetMicDistanceCm(static_cast<float>(micDistanceSlider.getValue()));
     };
-    addAndMakeVisible(micPositionSlider);
+    addAndMakeVisible(micDistanceSlider);
+
+    for (int index = 0; index < cabinetMicPositionCount(); ++index)
+        micPositionBox.addItem("Position: " + juce::String(kCabinetMicPositions[index].label), index + 1);
+    micPositionBox.setSelectedId(2, juce::dontSendNotification);
+    micPositionBox.setTooltip(utf8("Cone, Cone Edge, Edge, Off-Axis 중 목표 마이크 포지션을 선택합니다. 추정 슬롯도 tone profile EQ로 프리뷰됩니다."));
+    micPositionBox.onChange = [this]
+    {
+        selectMicPositionPreset(micPositionBox.getSelectedId() - 1);
+    };
+    addAndMakeVisible(micPositionBox);
 
     chainStrip.onBlockClicked = [this](const juce::String& blockId) { handleChainBlockClicked(blockId); };
     chainStrip.onBlockReset = [this](const juce::String& blockId) { handleChainBlockReset(blockId); };
@@ -202,7 +220,9 @@ void TonePreviewPanel::resized()
 
     auto micRow = area.removeFromTop(34);
     micRow.removeFromLeft(90);
-    micPositionSlider.setBounds(micRow.removeFromLeft(420).reduced(0, 3));
+    micPositionBox.setBounds(micRow.removeFromLeft(170).reduced(0, 4));
+    micRow.removeFromLeft(12);
+    micDistanceSlider.setBounds(micRow.removeFromLeft(238).reduced(0, 3));
     micRow.removeFromLeft(12);
     previewMicBox.setBounds(micRow.removeFromLeft(160).reduced(0, 4));
 
@@ -289,7 +309,8 @@ void TonePreviewPanel::applyPreviewControlLabels()
     // Cabinet-slot controls appear when a cabinet package occupies the slot;
     // the standard-cab source combo shows while the slot is at its default.
     const auto cabLoaded = capture.hasPreviewCabinetPackage();
-    micPositionSlider.setVisible(cabLoaded);
+    micPositionBox.setVisible(cabLoaded);
+    micDistanceSlider.setVisible(cabLoaded);
     previewMicBox.setVisible(cabLoaded);
     cabSourceBox.setVisible(! cabLoaded);
 }
@@ -618,7 +639,8 @@ void TonePreviewPanel::routeHansoPackage(std::shared_ptr<HansoPackage> package, 
         cabSlotSource = RigSlotSource::Imported;
         cabSlotLabel = toneName;
         observedPreviewCabinetRevision = capture.previewCabinetRevision();
-        capture.setPreviewMicPositionPercent(static_cast<float>(micPositionSlider.getValue()));
+        selectMicPositionPreset(micPositionBox.getSelectedId() - 1);
+        capture.setPreviewCabinetMicDistanceCm(static_cast<float>(micDistanceSlider.getValue()));
         previewMicBox.setSelectedId(1, juce::dontSendNotification);
         capture.setPreviewCabinetMicClass(CabinetMicClass::Unknown);
         applyPreviewControlLabels();
@@ -753,7 +775,8 @@ void TonePreviewPanel::syncModelFromCaptureEngine()
         {
             cabSlotSource = RigSlotSource::Session;
             cabSlotLabel = capture.previewCabinetSummary();
-            capture.setPreviewMicPositionPercent(static_cast<float>(micPositionSlider.getValue()));
+            selectMicPositionPreset(micPositionBox.getSelectedId() - 1);
+            capture.setPreviewCabinetMicDistanceCm(static_cast<float>(micDistanceSlider.getValue()));
             previewMicBox.setSelectedId(1, juce::dontSendNotification);
             capture.setPreviewCabinetMicClass(CabinetMicClass::Unknown);
             modelLabel.setText(utf8("Cabinet 슬롯: 세션 캡쳐가 삽입되었습니다."), juce::dontSendNotification);
@@ -1002,6 +1025,15 @@ void TonePreviewPanel::updateGainModel()
     capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
 }
 
+void TonePreviewPanel::selectMicPositionPreset(int positionIndex)
+{
+    if (positionIndex < 0 || positionIndex >= cabinetMicPositionCount())
+        return;
+
+    const auto percent = static_cast<double>(kCabinetMicPositions[positionIndex].normalizedPosition * 100.0f);
+    capture.setPreviewMicPositionPercent(static_cast<float>(percent));
+}
+
 void TonePreviewPanel::updateButtonState()
 {
     const auto hasSelection = sampleList.getSelectedRow() >= 0 && sampleList.getSelectedRow() < samples.size();
@@ -1010,7 +1042,8 @@ void TonePreviewPanel::updateButtonState()
     const auto cabPackageLoaded = capture.hasPreviewCabinetPackage();
     gainSlider.setEnabled(modelReady);
     cabinetButton.setEnabled(! cabPackageLoaded);
-    micPositionSlider.setEnabled(cabPackageLoaded);
+    micPositionBox.setEnabled(cabPackageLoaded);
+    micDistanceSlider.setEnabled(cabPackageLoaded);
     previewMicBox.setEnabled(cabPackageLoaded && capture.previewCabinetHasMicMatrix());
     cabSourceBox.setEnabled(! cabPackageLoaded && capture.isPreviewCabinetEnabled());
     if (! cabSourceBox.isPopupActive() && complementCabChooser == nullptr)

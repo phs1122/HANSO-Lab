@@ -50,6 +50,7 @@ set(HANSO_LAB_APP_SOURCES
     Source/Audio/CaptureAudioSource.cpp
     Source/Audio/PreviewCabinetProcessor.cpp
     Source/Audio/PreviewCabinetIrProcessor.cpp
+    Source/Audio/PreviewMicDistanceProcessor.cpp
     Source/Audio/PreviewModelProcessor.cpp
     Source/Capture/CaptureEngine.cpp
     Source/Capture/CabinetIrImporter.cpp
@@ -138,6 +139,7 @@ target_sources(HANSO_Lab_Tests PRIVATE
     Source/Audio/CaptureAudioSource.cpp
     Source/Audio/PreviewCabinetIrProcessor.cpp
     Source/Audio/PreviewCabinetProcessor.cpp
+    Source/Audio/PreviewMicDistanceProcessor.cpp
     Source/Audio/PreviewMicColorProcessor.cpp
     Source/Audio/PreviewModelProcessor.cpp
     Source/Capture/CaptureRecipe.cpp

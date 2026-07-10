@@ -380,9 +380,11 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
         return;
     }
 
-    if (wizard.mode == CaptureMode::Easy && step->isAnchorCapture() && ! wizard.calibrationPassed)
+    // UI keeps these controls disabled until calibration completes, and the
+    // engine enforces the same gate for every capture mode as a backstop.
+    if (step->isAnchorCapture() && ! wizard.calibrationPassed)
     {
-        appState.appendLog("Easy Capture calibration must pass before audio capture.");
+        appState.appendLog("Calibration must pass before audio capture.");
         return;
     }
 
@@ -1473,6 +1475,11 @@ bool CaptureEngine::loadPreviewCabinetPackage(const HansoPackage& package)
 void CaptureEngine::setPreviewMicPositionPercent(float percent)
 {
     audio.captureSource().setPreviewMicPositionNormalized(juce::jlimit(0.0f, 100.0f, percent) / 100.0f);
+}
+
+void CaptureEngine::setPreviewCabinetMicDistanceCm(float distanceCm)
+{
+    audio.captureSource().setPreviewCabinetMicDistanceCm(distanceCm);
 }
 
 void CaptureEngine::setPreviewCabinetMicClass(CabinetMicClass micClass)

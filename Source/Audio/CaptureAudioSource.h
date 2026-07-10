@@ -5,6 +5,7 @@
 #include "Audio/InputChannelLayout.h"
 #include "Audio/PreviewCabinetIrProcessor.h"
 #include "Audio/PreviewCabinetProcessor.h"
+#include "Audio/PreviewMicDistanceProcessor.h"
 #include "Audio/PreviewMicColorProcessor.h"
 #include "Audio/PreviewModelProcessor.h"
 #include "Capture/OutputRoutingPolicy.h"
@@ -56,6 +57,7 @@ public:
     juce::String previewPedalSummary() const;
     bool loadPreviewCabinetPackage(const HansoPackage& package, juce::String& error);
     void setPreviewMicPositionNormalized(float normalizedPosition) noexcept;
+    void setPreviewCabinetMicDistanceCm(float distanceCm) noexcept;
     // Mic-swap EQ preview from cabProfile.micMatrix. Unknown = original mic.
     void setPreviewCabinetMicClass(CabinetMicClass micClass) noexcept;
     bool previewCabinetHasMicMatrix() const noexcept;
@@ -111,6 +113,7 @@ private:
     PreviewCabinetIrProcessor cabinetIrProcessor;
     PreviewCabinetIrProcessor complementCabIrProcessor;
     PreviewMicColorProcessor micColorProcessor;
+    PreviewMicDistanceProcessor micDistanceProcessor;
     std::atomic<bool> complementCabUseCustom { false };
     std::atomic<int> playhead { 0 };
     std::atomic<int> calibrationPlayhead { 0 };

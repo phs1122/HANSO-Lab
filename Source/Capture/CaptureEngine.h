@@ -78,6 +78,7 @@ public:
     void clearPreviewModel();
     bool loadPreviewCabinetPackage(const HansoPackage& package);
     void setPreviewMicPositionPercent(float percent);
+    void setPreviewCabinetMicDistanceCm(float distanceCm);
     void setPreviewCabinetMicClass(CabinetMicClass micClass);
     bool previewCabinetHasMicMatrix() const noexcept;
     juce::String previewCabinetSummary() const;

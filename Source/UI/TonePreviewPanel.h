@@ -55,6 +55,7 @@ private:
     void playSelectedSample();
     void stopPlayback();
     void updateGainModel();
+    void selectMicPositionPreset(int positionIndex);
     void updateButtonState();
     void toggleRealCaptureMode();
     juce::String realCaptureChunkIdForSelection() const;
@@ -100,7 +101,8 @@ private:
     juce::String loadedDeviceLabel;
     juce::Slider gainSlider;
     // Cabinet slot controls, shown when a cabinet package occupies the slot.
-    juce::Slider micPositionSlider;
+    juce::ComboBox micPositionBox;
+    juce::Slider micDistanceSlider;
     juce::ComboBox previewMicBox;
     // Standard cab controls, shown while the cabinet slot is at its default.
     juce::ComboBox cabSourceBox;

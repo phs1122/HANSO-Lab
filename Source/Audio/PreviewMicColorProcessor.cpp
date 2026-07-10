@@ -1,7 +1,9 @@
 #include "Audio/PreviewMicColorProcessor.h"
 
+#include "Capture/CabinetCaptureState.h"
 #include "Capture/CabinetMicPositions.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace hanso
@@ -23,6 +25,18 @@ int classIndexFor(CabinetMicClass micClass) noexcept
 
     return -1;
 }
+
+CabinetMicClass effectiveMicClass(CabinetMicClass micClass) noexcept
+{
+    return micClass == CabinetMicClass::Unknown ? CabinetMicClass::Dynamic : micClass;
+}
+
+bool isRealSource(const juce::String& source) noexcept
+{
+    const auto parsed = cabinetSlotSourceFromString(source);
+    return parsed == CabinetSlotSource::CapturedIr || parsed == CabinetSlotSource::ImportedIr;
+}
+
 }
 
 void PreviewMicColorProcessor::prepare(double newSampleRate, int outputChannels) noexcept
@@ -44,11 +58,16 @@ void PreviewMicColorProcessor::reset() noexcept
 
 void PreviewMicColorProcessor::clear() noexcept
 {
+    profileDataLoaded.store(false);
     matrixLoaded.store(false);
-    positionDeltas.clear();
+    sourceProfiles.clear();
+    positionProfiles.clear();
+    for (auto& profiles : matrixProfiles)
+        profiles.clear();
     targetClassIndex.store(-1);
     loadedClassIndex = -2;
     loadedPosition = -1.0f;
+    profileCorrectionActive = false;
     targetLevelGainLinear = 1.0f;
     reset();
 }
@@ -61,17 +80,6 @@ bool PreviewMicColorProcessor::loadFromPackage(const HansoPackage& package)
     if (profileObject == nullptr)
         return false;
 
-    const auto* matrixObject = profileObject->getProperty("micMatrix").getDynamicObject();
-    if (matrixObject == nullptr)
-        return false;
-
-    const auto* entryArray = matrixObject->getProperty("entries").getArray();
-    if (entryArray == nullptr || entryArray->isEmpty())
-        return false;
-
-    // Reference mic class per position: the slot's own mic, dynamic when unknown.
-    std::array<int, 8> referenceClassByPosition {};
-    referenceClassByPosition.fill(0);
     if (const auto* positionArray = profileObject->getProperty("positions").getArray())
     {
         for (const auto& entry : *positionArray)
@@ -80,83 +88,74 @@ bool PreviewMicColorProcessor::loadFromPackage(const HansoPackage& package)
             if (positionObject == nullptr)
                 continue;
 
-            const auto index = positionIndexForCabinetId(positionObject->getProperty("id").toString());
-            const auto micClass = cabinetMicClassFromString(positionObject->getProperty("micClass").toString());
-            const auto classIndex = classIndexFor(micClass);
-            if (index >= 0 && index < static_cast<int>(referenceClassByPosition.size()) && classIndex >= 0)
-                referenceClassByPosition[static_cast<size_t>(index)] = classIndex;
-        }
-    }
-
-    struct ParsedEntry
-    {
-        bool valid { false };
-        CabinetToneProfile profile;
-    };
-
-    std::array<std::array<ParsedEntry, classCount>, 8> parsed {};
-    auto maxPositionIndex = -1;
-    for (const auto& entry : *entryArray)
-    {
-        const auto* entryObject = entry.getDynamicObject();
-        if (entryObject == nullptr)
-            continue;
-
-        const auto classIndex = classIndexFor(cabinetMicClassFromString(entryObject->getProperty("micClass").toString()));
-        const auto positionIndex = positionIndexForCabinetId(entryObject->getProperty("positionId").toString());
-        if (classIndex < 0 || positionIndex < 0 || positionIndex >= static_cast<int>(parsed.size()))
-            continue;
-
-        auto& slot = parsed[static_cast<size_t>(positionIndex)][static_cast<size_t>(classIndex)];
-        slot.profile = CabinetToneProfile::fromVar(entryObject->getProperty("toneProfile"));
-        slot.valid = slot.profile.valid;
-        maxPositionIndex = juce::jmax(maxPositionIndex, positionIndex);
-    }
-
-    if (maxPositionIndex < 0)
-        return false;
-
-    for (int positionIndex = 0; positionIndex <= maxPositionIndex; ++positionIndex)
-    {
-        const auto& classEntries = parsed[static_cast<size_t>(positionIndex)];
-        const auto referenceIndex = referenceClassByPosition[static_cast<size_t>(positionIndex)];
-        const auto& reference = classEntries[static_cast<size_t>(referenceIndex)];
-        if (! reference.valid)
-            continue;
-
-        PositionDeltas deltas;
-        deltas.normalizedPosition = kCabinetMicPositions[positionIndex].normalizedPosition;
-        for (int classIndex = 0; classIndex < classCount; ++classIndex)
-        {
-            const auto& target = classEntries[static_cast<size_t>(classIndex)];
-            if (! target.valid)
+            const auto positionIndex = positionIndexForCabinetId(positionObject->getProperty("id").toString());
+            if (positionIndex < 0)
                 continue;
 
-            for (size_t band = 0; band < deltas.bandDeltasDb[static_cast<size_t>(classIndex)].size(); ++band)
-                deltas.bandDeltasDb[static_cast<size_t>(classIndex)][band] =
-                    juce::jlimit(-previewDeltaLimitDb, previewDeltaLimitDb,
-                                 target.profile.bandGainsDb[band] - reference.profile.bandGainsDb[band]);
-            deltas.levelDeltasDb[static_cast<size_t>(classIndex)] =
-                juce::jlimit(-previewDeltaLimitDb, previewDeltaLimitDb,
-                             target.profile.levelDb - reference.profile.levelDb);
-        }
+            ProfileAnchor anchor;
+            anchor.normalizedPosition = kCabinetMicPositions[positionIndex].normalizedPosition;
+            anchor.profile = CabinetToneProfile::fromVar(positionObject->getProperty("toneProfile"));
+            anchor.micClass = cabinetMicClassFromString(positionObject->getProperty("micClass").toString());
+            if (! anchor.profile.valid)
+                continue;
 
-        positionDeltas.push_back(deltas);
+            positionProfiles.push_back(anchor);
+            if (isRealSource(positionObject->getProperty("source").toString()))
+                sourceProfiles.push_back(anchor);
+        }
     }
 
-    if (positionDeltas.empty())
-        return false;
+    if (const auto* matrixObject = profileObject->getProperty("micMatrix").getDynamicObject())
+    {
+        if (const auto* entryArray = matrixObject->getProperty("entries").getArray())
+        {
+            for (const auto& entry : *entryArray)
+            {
+                const auto* entryObject = entry.getDynamicObject();
+                if (entryObject == nullptr)
+                    continue;
 
-    std::sort(positionDeltas.begin(), positionDeltas.end(),
-              [](const PositionDeltas& a, const PositionDeltas& b)
-              {
-                  return a.normalizedPosition < b.normalizedPosition;
-              });
+                const auto classIndex = classIndexFor(
+                    cabinetMicClassFromString(entryObject->getProperty("micClass").toString()));
+                const auto positionIndex = positionIndexForCabinetId(
+                    entryObject->getProperty("positionId").toString());
+                if (classIndex < 0 || positionIndex < 0)
+                    continue;
 
-    loadedClassIndex = -2;
-    loadedPosition = -1.0f;
-    matrixLoaded.store(true);
-    return true;
+                ProfileAnchor anchor;
+                anchor.normalizedPosition = kCabinetMicPositions[positionIndex].normalizedPosition;
+                anchor.profile = CabinetToneProfile::fromVar(entryObject->getProperty("toneProfile"));
+                if (! anchor.profile.valid)
+                    continue;
+
+                anchor.micClass = cabinetMicClassFromString(entryObject->getProperty("micClass").toString());
+                matrixProfiles[static_cast<size_t>(classIndex)].push_back(anchor);
+            }
+        }
+    }
+
+    const auto sortByPosition = [](auto& anchors)
+    {
+        std::sort(anchors.begin(), anchors.end(),
+                  [](const auto& a, const auto& b)
+                  {
+                      return a.normalizedPosition < b.normalizedPosition;
+                  });
+    };
+
+    sortByPosition(sourceProfiles);
+    sortByPosition(positionProfiles);
+    auto anyMatrixProfile = false;
+    for (auto& profiles : matrixProfiles)
+    {
+        sortByPosition(profiles);
+        anyMatrixProfile = anyMatrixProfile || ! profiles.empty();
+    }
+
+    matrixLoaded.store(anyMatrixProfile);
+    const auto hasTargets = ! positionProfiles.empty() || anyMatrixProfile;
+    profileDataLoaded.store(! sourceProfiles.empty() && hasTargets);
+    return profileDataLoaded.load();
 }
 
 void PreviewMicColorProcessor::setTargetMicClass(CabinetMicClass micClass) noexcept
@@ -200,52 +199,98 @@ PreviewMicColorProcessor::BiquadCoefficients PreviewMicColorProcessor::makePeak(
     return coeffs;
 }
 
-void PreviewMicColorProcessor::interpolateDeltas(float normalizedPosition,
-                                                 int classIndex,
-                                                 std::array<float, static_cast<size_t>(cabinetToneBandCount)>& bandsDb,
-                                                 float& levelDb) const noexcept
+bool PreviewMicColorProcessor::interpolateProfile(const std::vector<ProfileAnchor>& anchors,
+                                                   float normalizedPosition,
+                                                   CabinetToneProfile& destination,
+                                                   CabinetMicClass* nearestMicClass) noexcept
 {
-    bandsDb.fill(0.0f);
-    levelDb = 0.0f;
-    if (positionDeltas.empty() || classIndex < 0 || classIndex >= classCount)
-        return;
+    destination = {};
+    if (anchors.empty())
+        return false;
 
     const auto clamped = juce::jlimit(0.0f, 1.0f, normalizedPosition);
-    const auto* lower = &positionDeltas.front();
-    const auto* upper = &positionDeltas.back();
-    for (size_t i = 1; i < positionDeltas.size(); ++i)
+    const auto& first = anchors.front();
+    const auto& last = anchors.back();
+    if (clamped <= first.normalizedPosition)
     {
-        if (positionDeltas[i].normalizedPosition >= clamped)
+        destination = first.profile;
+        if (nearestMicClass != nullptr)
+            *nearestMicClass = first.micClass;
+        return destination.valid;
+    }
+
+    if (clamped >= last.normalizedPosition)
+    {
+        destination = last.profile;
+        if (nearestMicClass != nullptr)
+            *nearestMicClass = last.micClass;
+        return destination.valid;
+    }
+
+    const ProfileAnchor* lower = &first;
+    const ProfileAnchor* upper = &last;
+    for (size_t i = 1; i < anchors.size(); ++i)
+    {
+        if (anchors[i].normalizedPosition >= clamped)
         {
-            upper = &positionDeltas[i];
-            lower = &positionDeltas[i - 1];
+            upper = &anchors[i];
+            lower = &anchors[i - 1];
             break;
         }
     }
 
     const auto span = juce::jmax(0.0001f, upper->normalizedPosition - lower->normalizedPosition);
     const auto mix = juce::jlimit(0.0f, 1.0f, (clamped - lower->normalizedPosition) / span);
+    destination = CabinetToneProfile::interpolate(lower->profile, upper->profile, mix);
+    if (nearestMicClass != nullptr)
+        *nearestMicClass = mix < 0.5f ? lower->micClass : upper->micClass;
+    return destination.valid;
+}
 
-    const auto& lowerBands = lower->bandDeltasDb[static_cast<size_t>(classIndex)];
-    const auto& upperBands = upper->bandDeltasDb[static_cast<size_t>(classIndex)];
-    for (size_t band = 0; band < bandsDb.size(); ++band)
-        bandsDb[band] = lowerBands[band] + (upperBands[band] - lowerBands[band]) * mix;
+bool PreviewMicColorProcessor::targetProfileFor(float normalizedPosition,
+                                                 CabinetMicClass sourceMicClass,
+                                                 int requestedClassIndex,
+                                                 CabinetToneProfile& destination) const noexcept
+{
+    auto classIndex = requestedClassIndex;
+    if (classIndex < 0)
+        classIndex = classIndexFor(effectiveMicClass(sourceMicClass));
 
-    const auto lowerLevel = lower->levelDeltasDb[static_cast<size_t>(classIndex)];
-    const auto upperLevel = upper->levelDeltasDb[static_cast<size_t>(classIndex)];
-    levelDb = lowerLevel + (upperLevel - lowerLevel) * mix;
+    if (classIndex >= 0 && classIndex < classCount
+        && interpolateProfile(matrixProfiles[static_cast<size_t>(classIndex)], normalizedPosition, destination))
+        return true;
+
+    return interpolateProfile(positionProfiles, normalizedPosition, destination);
 }
 
 void PreviewMicColorProcessor::rebuildCoefficientsIfNeeded() noexcept
 {
-    const auto classIndex = targetClassIndex.load();
+    const auto requestedClass = targetClassIndex.load();
     const auto position = micPositionNormalized.load();
-    if (classIndex == loadedClassIndex && std::abs(position - loadedPosition) < positionEpsilon)
+    if (requestedClass == loadedClassIndex && std::abs(position - loadedPosition) < positionEpsilon)
         return;
+
+    CabinetToneProfile sourceProfile;
+    CabinetMicClass sourceMicClass = CabinetMicClass::Unknown;
+    CabinetToneProfile targetProfile;
+    const auto haveSource = interpolateProfile(sourceProfiles, position, sourceProfile, &sourceMicClass);
+    const auto haveTarget = haveSource && targetProfileFor(position, sourceMicClass, requestedClass, targetProfile);
 
     std::array<float, static_cast<size_t>(cabinetToneBandCount)> bandsDb {};
     auto levelDb = 0.0f;
-    interpolateDeltas(position, classIndex, bandsDb, levelDb);
+    profileCorrectionActive = false;
+    if (haveTarget)
+    {
+        for (size_t band = 0; band < bandsDb.size(); ++band)
+        {
+            bandsDb[band] = juce::jlimit(-previewDeltaLimitDb, previewDeltaLimitDb,
+                                         targetProfile.bandGainsDb[band] - sourceProfile.bandGainsDb[band]);
+            profileCorrectionActive = profileCorrectionActive || std::abs(bandsDb[band]) > 1.0e-5f;
+        }
+        levelDb = juce::jlimit(-previewDeltaLimitDb, previewDeltaLimitDb,
+                                targetProfile.levelDb - sourceProfile.levelDb);
+        profileCorrectionActive = profileCorrectionActive || std::abs(levelDb) > 1.0e-5f;
+    }
 
     for (int band = 0; band < cabinetToneBandCount; ++band)
     {
@@ -258,21 +303,20 @@ void PreviewMicColorProcessor::rebuildCoefficientsIfNeeded() noexcept
     }
 
     targetLevelGainLinear = std::pow(10.0f, levelDb / 20.0f);
-    loadedClassIndex = classIndex;
+    loadedClassIndex = requestedClass;
     loadedPosition = position;
 }
 
 void PreviewMicColorProcessor::process(juce::AudioBuffer<float>& buffer, int numSamples) noexcept
 {
-    if (! matrixLoaded.load() || numSamples <= 0)
+    if (! profileDataLoaded.load() || numSamples <= 0)
         return;
 
     rebuildCoefficientsIfNeeded();
+    if (! profileCorrectionActive)
+        return;
 
-    if (loadedClassIndex < 0)
-        return; // original mic selected: strict bypass
-
-    const auto channels = juce::jmin(buffer.getNumChannels(), maxChannels);
+    const auto channels = juce::jmin(juce::jmin(buffer.getNumChannels(), maxChannels), preparedChannels);
     for (int channel = 0; channel < channels; ++channel)
     {
         auto* samples = buffer.getWritePointer(channel);
@@ -285,7 +329,7 @@ void PreviewMicColorProcessor::process(juce::AudioBuffer<float>& buffer, int num
             for (size_t band = 0; band < channelFilters.size(); ++band)
                 sample = channelFilters[band].process(sample, coefficients[band]);
 
-            // One-pole smoothing keeps level-delta changes click-free.
+            // One-pole smoothing keeps profile changes click-free.
             gain += (targetLevelGainLinear - gain) * 0.002f;
             samples[i] = sample * gain;
         }

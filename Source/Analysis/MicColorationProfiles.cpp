@@ -163,22 +163,22 @@ struct PositionStageSet
     float gainTrimDb;
 };
 
-// Mirrors hst::kMicPositionPresets (Center, Cap Edge, Cone, Off-axis): low
+// Mirrors hst::kMicPositionPresets (Cone, Cone Edge, Edge, Off-axis): low
 // shelf, mid peak, high shelf, high-cut low-pass, plus a broadband trim.
 constexpr PositionStageSet kPositionStages[] = {
-    // Center
+    // Cone: direct, bright inner-cone response.
     { { { { BiquadSpec::Type::LowShelf, 120.0, 0.7, 2.5 },
           { BiquadSpec::Type::Peaking, 2500.0, 1.0, 2.0 },
           { BiquadSpec::Type::HighShelf, 6500.0, 0.8, 3.5 },
           { BiquadSpec::Type::LowPass, 9000.0, 0.707, 0.0 } } },
       0.5f },
-    // Cap Edge (default)
+    // Cone Edge: balanced transition between dust cap and cone.
     { { { { BiquadSpec::Type::LowShelf, 130.0, 0.7, 1.5 },
           { BiquadSpec::Type::Peaking, 2000.0, 1.0, 1.0 },
           { BiquadSpec::Type::HighShelf, 6000.0, 0.8, 2.0 },
           { BiquadSpec::Type::LowPass, 8500.0, 0.707, 0.0 } } },
       0.0f },
-    // Cone
+    // Edge: warmer outer-cone response with a lower high-frequency ceiling.
     { { { { BiquadSpec::Type::LowShelf, 150.0, 0.8, 2.0 },
           { BiquadSpec::Type::Peaking, 1500.0, 1.1, 3.5 },
           { BiquadSpec::Type::HighShelf, 5500.0, 0.9, 0.5 },
@@ -196,7 +196,7 @@ constexpr int kPositionStageCount = static_cast<int>(sizeof(kPositionStages) / s
 
 int clampedPositionIndex(int positionIndex) noexcept
 {
-    // Cap Edge is the neutral reference position, matching the FX default.
+    // Cone Edge is the neutral reference position, matching the FX default.
     if (positionIndex < 0 || positionIndex >= kPositionStageCount)
         return 1;
     return positionIndex;

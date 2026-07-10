@@ -8,6 +8,7 @@
 #include "Analysis/CabinetToneProfiler.h"
 #include "Analysis/MicColorationProfiles.h"
 #include "Audio/CaptureAudioSource.h"
+#include "Audio/PreviewMicDistanceProcessor.h"
 #include "Audio/PreviewMicColorProcessor.h"
 #include "Analysis/CalibrationValidator.h"
 #include "Analysis/ModelFidelityEvaluator.h"
@@ -320,8 +321,14 @@ void testEstimatedSlotInterpolation()
         return;
 
     check(edge->toneProfile.valid && edge->toneProfile.estimated, "estimated slot carries a tone profile");
-    check(edge->toneProfile.bandGainsDb.front() > -4.0f && edge->toneProfile.bandGainsDb.front() < 4.0f,
-          "estimated profile interpolated between anchors",
+    const auto matrix = hanso::CabinetMicMatrixEstimator::estimate(wizard.cabinetSlots);
+    const hanso::CabinetMicMatrixEntry* expected = nullptr;
+    for (const auto& entry : matrix.entries)
+        if (entry.positionId == "cab-edge" && entry.micClass == hanso::CabinetMicClass::Dynamic)
+            expected = &entry;
+    check(expected != nullptr && expected->toneProfile.valid
+              && std::abs(edge->toneProfile.bandGainsDb.front() - expected->toneProfile.bandGainsDb.front()) < 0.01f,
+          "estimated slot uses its calculated Cone Edge profile",
           juce::String(edge->toneProfile.bandGainsDb.front(), 2));
 
     const auto roundTrip = hanso::CabinetToneProfile::fromVar(edge->toneProfile.toVar());
@@ -521,7 +528,21 @@ void testPreviewMicColorProcessor()
     check(bypassDelta < 1.0e-6f, "original mic selection is a strict bypass",
           juce::String(bypassDelta, 8));
 
+    processor.reset();
+    auto conePosition = original;
+    processor.setMicPositionNormalized(0.0f);
+    processor.setTargetMicClass(hanso::CabinetMicClass::Unknown);
+    processor.process(conePosition, conePosition.getNumSamples());
+    auto positionDelta = 0.0f;
+    for (int i = 0; i < original.getNumSamples(); ++i)
+        positionDelta = juce::jmax(positionDelta,
+                                   std::abs(conePosition.getSample(0, i) - original.getSample(0, i)));
+    check(positionDelta > 1.0e-3f, "estimated Cone position changes the real IR with its profile",
+          juce::String(positionDelta, 6));
+
+    processor.reset();
     auto swapped = original;
+    processor.setMicPositionNormalized(0.33f);
     processor.setTargetMicClass(hanso::CabinetMicClass::Ribbon);
     processor.process(swapped, swapped.getNumSamples());
     auto swapDelta = 0.0f;
@@ -535,6 +556,36 @@ void testPreviewMicColorProcessor()
     emptyProcessor.prepare(sampleRate, 2);
     hanso::HansoPackage emptyPackage;
     check(! emptyProcessor.loadFromPackage(emptyPackage), "package without micMatrix stays inactive");
+}
+
+void testPreviewMicDistanceProcessor()
+{
+    juce::AudioBuffer<float> original(1, 4096);
+    for (int i = 0; i < original.getNumSamples(); ++i)
+        original.setSample(0, i,
+                           0.5f * std::sin(2.0f * juce::MathConstants<float>::pi * 5000.0f
+                                           * static_cast<float>(i) / static_cast<float>(sampleRate)));
+
+    hanso::PreviewMicDistanceProcessor processor;
+    processor.prepare(sampleRate, 1);
+
+    auto closeMic = original;
+    processor.setDistanceCm(hanso::PreviewMicDistanceProcessor::referenceDistanceCm);
+    processor.process(closeMic, closeMic.getNumSamples());
+    auto closeDelta = 0.0f;
+    for (int i = 0; i < original.getNumSamples(); ++i)
+        closeDelta = juce::jmax(closeDelta,
+                                std::abs(closeMic.getSample(0, i) - original.getSample(0, i)));
+    check(closeDelta < 1.0e-6f, "reference mic distance leaves the captured IR unchanged",
+          juce::String(closeDelta, 8));
+
+    processor.reset();
+    auto farMic = original;
+    processor.setDistanceCm(20.0f);
+    processor.process(farMic, farMic.getNumSamples());
+    check(farMic.getRMSLevel(0, 0, farMic.getNumSamples())
+              < original.getRMSLevel(0, 0, original.getNumSamples()) * 0.5f,
+          "farther mic distance attenuates the preview");
 }
 
 void testCabinetCaptureMicMetadata()
@@ -725,10 +776,16 @@ void testMicColorationCurves()
     check(dynamicBands[4] > ribbonBands[4] + 1.0f, "dynamic presence exceeds ribbon",
           juce::String(dynamicBands[4], 2) + " / " + juce::String(ribbonBands[4], 2));
 
-    const auto center = hanso::MicColorationProfiles::positionColorationBandsDb(0);
+    check(juce::String(hanso::kCabinetMicPositions[0].label) == "Cone"
+              && juce::String(hanso::kCabinetMicPositions[1].label) == "Cone Edge"
+              && juce::String(hanso::kCabinetMicPositions[2].label) == "Edge"
+              && juce::String(hanso::kCabinetMicPositions[3].label) == "Off-Axis",
+          "cabinet position slots use Cone/Cone Edge/Edge/Off-Axis terminology");
+
+    const auto cone = hanso::MicColorationProfiles::positionColorationBandsDb(0);
     const auto offAxis = hanso::MicColorationProfiles::positionColorationBandsDb(3);
-    check(center[5] > offAxis[5] + 3.0f, "center keeps more highs than off-axis",
-          juce::String(center[5], 2) + " / " + juce::String(offAxis[5], 2));
+    check(cone[5] > offAxis[5] + 3.0f, "cone keeps more highs than off-axis",
+          juce::String(cone[5], 2) + " / " + juce::String(offAxis[5], 2));
 }
 
 void testCabinetMicMatrixEstimator()
@@ -1057,6 +1114,7 @@ int main()
     testCabinetMicMatrixEstimator();
     testCabinetCaptureMicMetadata();
     testPreviewMicColorProcessor();
+    testPreviewMicDistanceProcessor();
     testPreviewChainPolicy();
     testModelDataChainCoverage();
     testPreviewRigChainCoexistence();
