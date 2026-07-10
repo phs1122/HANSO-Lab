@@ -83,6 +83,7 @@ set(HANSO_LAB_APP_SOURCES
     Source/UI/CaptureInputControls.cpp
     Source/UI/CapturePanel.cpp
     Source/UI/OnboardingPanel.cpp
+    Source/UI/PreviewChainStrip.cpp
     Source/UI/CaptureStatusIcon.cpp
     Source/UI/PreviewWaveformComponent.cpp
     Source/UI/TonePreviewPanel.cpp

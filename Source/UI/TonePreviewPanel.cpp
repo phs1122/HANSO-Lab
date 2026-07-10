@@ -137,6 +137,8 @@ TonePreviewPanel::TonePreviewPanel(ApplicationState& state, CaptureEngine& captu
     statusLabel.setJustificationType(juce::Justification::centredLeft);
     statusLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
     addAndMakeVisible(statusLabel);
+    addAndMakeVisible(chainStrip);
+    ampLabel.setVisible(false);
     addAndMakeVisible(waveform);
     waveform.onSeek = [this](double progress)
     {
@@ -159,19 +161,6 @@ TonePreviewPanel::~TonePreviewPanel()
 void TonePreviewPanel::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour::fromRGB(22, 24, 26));
-
-    auto amp = ampLabel.getBounds().expanded(10).toFloat();
-    g.setColour(juce::Colour::fromRGB(62, 49, 40));
-    g.fillRoundedRectangle(amp, 8.0f);
-    g.setColour(juce::Colour::fromRGB(135, 112, 88));
-    g.drawRoundedRectangle(amp, 8.0f, 2.0f);
-
-    auto grille = ampLabel.getBounds().reduced(26, 44).toFloat();
-    g.setColour(juce::Colour::fromRGB(30, 32, 32));
-    g.fillRoundedRectangle(grille, 4.0f);
-    g.setColour(juce::Colour::fromRGB(80, 82, 78));
-    for (int x = static_cast<int>(grille.getX()); x < static_cast<int>(grille.getRight()); x += 12)
-        g.drawVerticalLine(x, grille.getY(), grille.getBottom());
 }
 
 void TonePreviewPanel::resized()
@@ -182,8 +171,8 @@ void TonePreviewPanel::resized()
     folderLabel.setBounds(area.removeFromTop(24));
     area.removeFromTop(12);
 
-    auto ampArea = area.removeFromTop(210);
-    ampLabel.setBounds(ampArea.reduced(18, 18));
+    chainStrip.setBounds(area.removeFromTop(78).reduced(0, 6));
+    area.removeFromTop(6);
 
     auto gainRow = area.removeFromTop(36);
     gainRow.removeFromLeft(90);
@@ -285,6 +274,44 @@ void TonePreviewPanel::applyPreviewControlLabels()
     }
 }
 
+void TonePreviewPanel::refreshChainStrip()
+{
+    using Block = PreviewChainStrip::Block;
+    using Kind = PreviewChainStrip::BlockKind;
+
+    std::vector<Block> blocks;
+    blocks.push_back({ "Sample", utf8("클린 DI"), Kind::Io });
+
+    if (previewSourceMode == PreviewSourceMode::CabinetPackage)
+    {
+        blocks.push_back({ "Amp", "Neutral DI", Kind::Complement });
+        blocks.push_back({ "Cab",
+                           capture.previewCabinetHasMicMatrix() ? utf8("패키지 · IR+micMatrix")
+                                                                : utf8("패키지 · IR"),
+                           Kind::Package });
+    }
+    else if (previewSourceMode == PreviewSourceMode::AmpModel && modelReady)
+    {
+        const auto deviceLabel = loadedDeviceLabel.isNotEmpty() ? loadedDeviceLabel : juce::String("Amp");
+        blocks.push_back({ deviceLabel, utf8("패키지"), Kind::Package });
+
+        if (deviceLabel == "PreAmp")
+            blocks.push_back({ "Power", "Neutral", Kind::Complement });
+
+        if (capture.isPreviewCabinetEnabled())
+            blocks.push_back({ "Cab", utf8("Standard EQ · 보완"), Kind::Complement });
+        else if (deviceLabel == "Pedal" || deviceLabel == "Effect")
+            blocks.push_back({ "Out chain", "FRFR", Kind::Complement });
+    }
+    else
+    {
+        blocks.push_back({ "Model", utf8("없음 · 클린 재생"), Kind::Io });
+    }
+
+    blocks.push_back({ "Out", {}, Kind::Io });
+    chainStrip.setBlocks(std::move(blocks));
+}
+
 bool TonePreviewPanel::isCabinetPackage(const HansoPackage& package) const noexcept
 {
     if (package.metadata.category == HansoCategory::Cabinet)
@@ -354,6 +381,7 @@ void TonePreviewPanel::loadInitialPreviewModel()
         modelReady = true;
         capture.setPreviewCabinetEnabled(
             previewComplementCabDefaultForCaptureType(appState.captureWizard().captureType));
+        loadedDeviceLabel = toString(appState.captureWizard().captureType);
         observedPreviewRevision = capture.previewModelRevision();
         applyPreviewControlLabels();
         modelLabel.setText(model.summary(), juce::dontSendNotification);
@@ -389,6 +417,7 @@ void TonePreviewPanel::loadModelFromPackage()
     capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
     capture.setPreviewCabinetEnabled(
         previewComplementCabDefaultForCaptureType(appState.captureWizard().captureType));
+    loadedDeviceLabel = toString(appState.captureWizard().captureType);
     previewSourceMode = PreviewSourceMode::AmpModel;
     observedPreviewRevision = capture.previewModelRevision();
     applyPreviewControlLabels();
@@ -426,6 +455,9 @@ bool TonePreviewPanel::loadModelFromHansoFile(const juce::File& file)
         capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
         capture.setPreviewCabinetEnabled(previewComplementCabDefaultForPackage(package.metadata.deviceType,
                                                                                package.metadata.category));
+        loadedDeviceLabel = package.metadata.deviceType.isNotEmpty()
+                          ? package.metadata.deviceType
+                          : toString(package.metadata.category);
     }
     previewSourceMode = modelReady ? PreviewSourceMode::AmpModel : PreviewSourceMode::Clean;
     observedPreviewRevision = capture.previewModelRevision();
@@ -532,6 +564,7 @@ void TonePreviewPanel::syncModelFromCaptureEngine()
         capture.setPreviewGainPercent(static_cast<float>(gainSlider.getValue()));
         capture.setPreviewCabinetEnabled(
             previewComplementCabDefaultForCaptureType(appState.captureWizard().captureType));
+        loadedDeviceLabel = toString(appState.captureWizard().captureType);
         applyPreviewControlLabels();
         modelLabel.setText(utf8("Current preview tone: ") + model.summary(), juce::dontSendNotification);
     }
@@ -744,6 +777,7 @@ void TonePreviewPanel::updateButtonState()
     loopButton.setToggleState(capture.isPreviewLoopEnabled(), juce::dontSendNotification);
     normalizationButton.setToggleState(capture.isPreviewNormalizationEnabled(), juce::dontSendNotification);
     cabinetButton.setToggleState(capture.isPreviewCabinetEnabled(), juce::dontSendNotification);
+    refreshChainStrip();
 }
 
 bool TonePreviewPanel::readSampleFile(const juce::File& file,

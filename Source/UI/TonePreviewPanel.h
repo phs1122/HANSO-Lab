@@ -7,6 +7,7 @@
 #include "Capture/CaptureType.h"
 #include "Model/CompactHansoModel.h"
 #include "Model/HansoPackage.h"
+#include "UI/PreviewChainStrip.h"
 #include "UI/PreviewWaveformComponent.h"
 
 namespace hanso
@@ -46,6 +47,7 @@ private:
     bool loadCabinetPackageFromFile(const juce::File& file, HansoPackage& package);
     bool isCabinetPackage(const HansoPackage& package) const noexcept;
     void applyPreviewControlLabels();
+    void refreshChainStrip();
     bool loadCompactModelChunk(HansoPackage& package,
                                const juce::File& sourceFile,
                                CompactHansoModel& destination,
@@ -83,6 +85,10 @@ private:
     juce::Label modelLabel;
     juce::Label folderLabel;
     juce::Label ampLabel;
+    PreviewChainStrip chainStrip;
+    // What kind of device the loaded model is (CaptureType string), shown as
+    // the package block title in the chain strip.
+    juce::String loadedDeviceLabel;
     juce::Slider gainSlider;
     // Cabinet package mode only: mic-swap EQ preview from cabProfile.micMatrix.
     juce::ComboBox previewMicBox;
