@@ -25,7 +25,7 @@ inline juce::String toString(CaptureMode mode)
 
 inline juce::String toKoreanString(CaptureMode mode)
 {
-    return mode == CaptureMode::Easy ? utf8("간편 캡쳐") : utf8("정식 캡쳐");
+    return mode == CaptureMode::Easy ? utf8("간편 캡쳐") : utf8("일반 캡쳐");
 }
 
 inline juce::String toString(CableGuideType type)

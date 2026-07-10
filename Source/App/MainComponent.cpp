@@ -62,11 +62,7 @@ MainComponent::MainComponent()
       workflow(state, captureEngine, analysisEngine),
       capturePanel(state, captureEngine, workflow)
 {
-    setLookAndFeel(&lookAndFeel);
-
-    lookAndFeel.setColour(juce::ResizableWindow::backgroundColourId, juce::Colour::fromRGB(24, 25, 27));
-    lookAndFeel.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour::fromRGB(24, 25, 27));
-    lookAndFeel.setColour(juce::TabbedButtonBar::tabTextColourId, juce::Colours::white);
+    setLookAndFeel(&lookAndFeel);   // palette lives in HansoLookAndFeel
 
     appTitle.setText("HANSO Lab", juce::dontSendNotification);
     appTitle.setJustificationType(juce::Justification::centred);
@@ -80,10 +76,23 @@ MainComponent::MainComponent()
 
     addAndMakeVisible(capturePanel);
     capturePanel.startUpdating();
+    capturePanel.setVisible(false);   // onboarding shows first
+
+    onboarding.onComplete = [this](CaptureType type, CaptureMode mode) { applyOnboardingResult(type, mode); };
+    onboarding.onSkip     = [this] { finishOnboarding(false); };
+    addAndMakeVisible(onboarding);
+
+    // Onboarding is a first-run experience: skip it once it has been completed.
+    if (settings.getBoolValue("onboardingDone", false))
+    {
+        onboardingActive = false;
+        onboarding.setVisible(false);
+        capturePanel.setVisible(true);
+    }
 
     audioEngine.initialise();
     state.appendLog("HANSO Lab initialized.");
-    setSize(1440, 820);
+    setSize(1600, 1000);
     startTimerHz(12);
 }
 
@@ -110,6 +119,42 @@ void MainComponent::resized()
     settingsButton.setBounds(top.removeFromRight(42));
     appTitle.setBounds(top);
     capturePanel.setBounds(area.reduced(10));
+    onboarding.setBounds(area);
+}
+
+void MainComponent::applyOnboardingResult(CaptureType type, CaptureMode mode)
+{
+    capturePanel.applyOnboardingSelection(type, mode);
+    finishOnboarding(true);
+}
+
+void MainComponent::finishOnboarding(bool)
+{
+    onboardingActive = false;
+    onboarding.setVisible(false);
+    capturePanel.setVisible(true);
+    settings.setValue("onboardingDone", true);
+    settings.saveIfNeeded();
+    resized();
+}
+
+void MainComponent::showOnboarding()
+{
+    onboardingActive = true;
+    onboarding.restart();
+    capturePanel.setVisible(false);
+    onboarding.setVisible(true);
+    resized();
+}
+
+juce::PropertiesFile::Options MainComponent::settingsOptions()
+{
+    juce::PropertiesFile::Options options;
+    options.applicationName = "HANSO Lab";
+    options.filenameSuffix = ".settings";
+    options.folderName = "HANSO Lab";
+    options.osxLibrarySubFolder = "Application Support";
+    return options;
 }
 
 void MainComponent::timerCallback()
@@ -144,6 +189,7 @@ void MainComponent::showSettingsDialog()
     juce::PopupMenu menu;
     menu.addItem(1, "Audio Settings");
     menu.addItem(2, "Log");
+    menu.addItem(4, utf8("캡쳐 환경 다시 설정"));
     menu.addSeparator();
     menu.addItem(3, layoutDebugEnabled ? "Hide Layout Debug" : "Show Layout Debug");
 
@@ -156,6 +202,8 @@ void MainComponent::showSettingsDialog()
                                showLogDialog();
                            else if (result == 3)
                                toggleLayoutDebugMode();
+                           else if (result == 4)
+                               showOnboarding();
                        });
 }
 

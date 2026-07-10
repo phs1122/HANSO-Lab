@@ -36,6 +36,9 @@ public:
     ResidualModelInfo residualModel;
     juce::var captureWorkflow;
     juce::var cabinetProfile;
+    // Per-anchor model-vs-real-recording accuracy report (ESR etc.), written
+    // by the finish-capture fidelity evaluation when sample recordings exist.
+    juce::var captureFidelity;
     juce::var dspCore;
     juce::OwnedArray<HansoBinaryChunk> chunks;
 

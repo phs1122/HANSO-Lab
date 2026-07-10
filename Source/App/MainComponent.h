@@ -9,7 +9,9 @@
 #include "Analysis/AnalysisEngine.h"
 #include "UI/AudioSettingsPanel.h"
 #include "UI/CapturePanel.h"
+#include "UI/HansoLookAndFeel.h"
 #include "UI/LogPanel.h"
+#include "UI/OnboardingPanel.h"
 
 namespace hanso
 {
@@ -37,11 +39,20 @@ private:
     AnalysisEngine analysisEngine;
     LabWorkflow workflow;
 
-    juce::LookAndFeel_V4 lookAndFeel;
+    HansoLookAndFeel lookAndFeel;
     juce::TooltipWindow tooltipWindow { this, 700 };
     juce::Label appTitle;
     juce::TextButton settingsButton { "Settings" };
     bool layoutDebugEnabled { false };
     CapturePanel capturePanel;
+    OnboardingPanel onboarding;
+    bool onboardingActive { true };
+
+    static juce::PropertiesFile::Options settingsOptions();
+    juce::PropertiesFile settings { settingsOptions() };
+
+    void finishOnboarding(bool completed);
+    void applyOnboardingResult(CaptureType type, CaptureMode mode);
+    void showOnboarding();
 };
 }

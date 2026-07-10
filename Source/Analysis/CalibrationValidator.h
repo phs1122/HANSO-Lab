@@ -31,6 +31,7 @@ struct CalibrationValidationResult
     bool outputLevelInRange { false };
     bool snrOk { false };
     bool identityOk { false };
+    bool muteDropRescuedIdentity { false };
     bool loopbackSuspected { false };
     float returnLevelDbfs { -120.0f };
     float returnRmsDbfs { -120.0f };
@@ -60,7 +61,16 @@ public:
                                                      float returnLevelDbfs,
                                                      float outputLevelDbfs,
                                                      float noiseFloorDbfs,
-                                                     const CalibrationValidationConfig& config = {});
+                                                     const CalibrationValidationConfig& config = {},
+                                                     bool muteDropIdentityConfirmed = false);
+
+    // Distortion-robust identity check: heavy saturation spreads probe energy
+    // into harmonics and can defeat the Goertzel tone-dominance test on an
+    // honest signal. If muting the output makes the return drop by at least
+    // requiredDropDb, the return demonstrably follows our output.
+    static bool checkMuteDropIdentity(float preMuteReturnDbfs,
+                                      float muteWindowReturnDbfs,
+                                      float requiredDropDb = 6.0f) noexcept;
 
 private:
     static double goertzelPower(const float* samples,

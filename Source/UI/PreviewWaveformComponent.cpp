@@ -65,7 +65,7 @@ void PreviewWaveformComponent::paint(juce::Graphics& g)
     auto timeArea = getLocalBounds().reduced(10, 4).removeFromTop(18);
     const auto currentSeconds = progress * durationSeconds;
     g.setColour(juce::Colours::lightgrey);
-    g.setFont(13.0f);
+    g.setFont(15.5f);
     g.drawText(formatTime(currentSeconds), timeArea.removeFromLeft(54), juce::Justification::centredLeft);
     g.drawText(formatTime(durationSeconds), timeArea.removeFromRight(54), juce::Justification::centredRight);
 

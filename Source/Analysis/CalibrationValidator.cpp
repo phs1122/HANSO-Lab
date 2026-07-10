@@ -55,7 +55,7 @@ void setLevelMessage(CalibrationValidationResult& result)
     result.status = CalibrationValidationStatus::SignalTooLow;
     result.code = "probe-level-too-low";
     result.messageEnglish = "The probe is detected, but the return is not high enough above the measured noise floor or is outside the calibration range.";
-    result.messageKorean = utf8("신호는 감지되나 레벨이 부족합니다. 앱 출력 슬라이더를 안전 범위 안에서 조정하거나 장비의 리턴/출력 볼륨을 올려 주세요.");
+    result.messageKorean = utf8("신호는 감지되나 레벨이 부족합니다. 리턴이 목표 범위에 들도록 장비의 출력 볼륨 또는 인터페이스 입력 게인을 올려 주세요.");
 }
 }
 
@@ -108,7 +108,8 @@ CalibrationValidationResult CalibrationValidator::validateProbe(const juce::Audi
                                                                 float returnLevelDbfs,
                                                                 float outputLevelDbfs,
                                                                 float noiseFloorDbfs,
-                                                                const CalibrationValidationConfig& config)
+                                                                const CalibrationValidationConfig& config,
+                                                                bool muteDropIdentityConfirmed)
 {
     CalibrationValidationResult result;
     result.returnLevelDbfs = returnLevelDbfs;
@@ -152,6 +153,11 @@ CalibrationValidationResult CalibrationValidator::validateProbe(const juce::Audi
     result.outOfBandDbfs = powerToDbfs(outOfBandPower);
     result.toneDominanceDb = ratioToDb(inBandPower, outOfBandPower);
     result.identityOk = result.toneDominanceDb >= config.requiredToneDominanceDb;
+    if (! result.identityOk && muteDropIdentityConfirmed)
+    {
+        result.identityOk = true;
+        result.muteDropRescuedIdentity = true;
+    }
 
     if (! result.inputLevelInRange || ! result.outputLevelInRange || ! result.snrOk)
     {
@@ -166,10 +172,29 @@ CalibrationValidationResult CalibrationValidator::validateProbe(const juce::Audi
     }
 
     result.status = CalibrationValidationStatus::Passed;
-    result.code = "probe-valid";
-    result.messageEnglish = "Calibration probe verified.";
-    result.messageKorean = utf8("캘리브레이션 프로브 신호가 정상적으로 리턴되었습니다.");
+    if (result.muteDropRescuedIdentity)
+    {
+        result.code = "probe-valid-mute-drop";
+        result.messageEnglish = "Calibration probe verified via mute-drop test (heavy distortion masked the probe tones).";
+        result.messageKorean = utf8("뮤트-드롭 테스트로 프로브 신호가 확인되었습니다 (강한 왜곡으로 톤 판별 대신 사용).");
+    }
+    else
+    {
+        result.code = "probe-valid";
+        result.messageEnglish = "Calibration probe verified.";
+        result.messageKorean = utf8("캘리브레이션 프로브 신호가 정상적으로 리턴되었습니다.");
+    }
     return result;
+}
+
+bool CalibrationValidator::checkMuteDropIdentity(float preMuteReturnDbfs,
+                                                 float muteWindowReturnDbfs,
+                                                 float requiredDropDb) noexcept
+{
+    if (preMuteReturnDbfs <= minAnalysisDb)
+        return false;
+
+    return preMuteReturnDbfs - muteWindowReturnDbfs >= requiredDropDb;
 }
 
 double CalibrationValidator::goertzelPower(const float* samples,

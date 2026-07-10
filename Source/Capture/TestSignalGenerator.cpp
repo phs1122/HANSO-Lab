@@ -36,7 +36,11 @@ juce::String TestSignalGenerator::toString(TestSignalType type)
 
 std::array<double, 10> TestSignalGenerator::multiSineFrequencies() noexcept
 {
-    return { 82.41, 110.0, 146.83, 196.0, 246.94, 329.63, 440.0, 880.0, 1760.0, 3520.0 };
+    // Integer Hz so each tone completes a whole number of cycles in the 1-second
+    // probe buffer, letting it loop seamlessly (non-integer guitar-note values
+    // left a non-zero sample at the wrap point, producing a click every second).
+    // Generation and Goertzel detection share this array, so detection is exact.
+    return { 82.0, 110.0, 147.0, 196.0, 247.0, 330.0, 440.0, 880.0, 1760.0, 3520.0 };
 }
 
 void TestSignalGenerator::generateLogSineSweep(juce::AudioBuffer<float>& buffer, const TestSignalSpec& spec)

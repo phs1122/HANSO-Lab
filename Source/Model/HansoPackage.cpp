@@ -342,6 +342,8 @@ juce::var HansoPackage::createMetadataVar() const
         object->setProperty("captureWorkflow", captureWorkflow);
     if (! cabinetProfile.isVoid())
         object->setProperty("cabProfile", cabinetProfile);
+    if (! captureFidelity.isVoid())
+        object->setProperty("captureFidelity", captureFidelity);
 
     auto modelData = new juce::DynamicObject();
     if (metadata.category == HansoCategory::Cabinet)

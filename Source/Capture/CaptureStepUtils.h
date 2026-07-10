@@ -45,4 +45,21 @@ inline juce::String alignedChunkIdForStep(const CaptureStep& step)
     return step.isAnchorCapture() ? step.anchor.chunkPathPrefix() + "/aligned-captured.pcm16"
                                 : "capture/" + step.stepId + "/aligned-captured.pcm16";
 }
+
+// Sample-injection chunk ids are keyed by this sanitized form of the preview
+// sample's file name; capture and Tone Preview must agree on it.
+inline juce::String sanitizePreviewSampleId(const juce::String& name)
+{
+    juce::String id;
+    for (const auto character : name.toLowerCase())
+    {
+        if (juce::CharacterFunctions::isLetterOrDigit(character))
+            id += character;
+        else if (! id.endsWith("-"))
+            id += '-';
+    }
+
+    id = id.trimCharactersAtStart("-").trimCharactersAtEnd("-");
+    return id.isNotEmpty() ? id : juce::String("sample");
+}
 }

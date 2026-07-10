@@ -47,7 +47,7 @@ private:
             setUsingNativeTitleBar(true);
             setContentOwned(new MainComponent(), true);
             setResizable(true, true);
-            centreWithSize(1180, 760);
+            centreWithSize(1600, 1000);
             setVisible(true);
         }
 
