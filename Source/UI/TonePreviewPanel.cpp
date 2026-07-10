@@ -336,22 +336,51 @@ void TonePreviewPanel::refreshChainStrip()
     }
     else if (previewSourceMode == PreviewSourceMode::AmpModel && modelReady)
     {
-        const auto deviceLabel = loadedDeviceLabel.isNotEmpty() ? loadedDeviceLabel : juce::String("Amp");
-        blocks.push_back({ deviceLabel, utf8("패키지"), Kind::Package });
+        const auto device = loadedDeviceLabel.isNotEmpty() ? loadedDeviceLabel : juce::String("Amp");
+        const auto isPedal = device == "Pedal" || device == "Effect";
+        const auto cabOn = capture.isPreviewCabinetEnabled();
+        const auto complementCabSubtitle = capture.previewComplementCabUseCustom()
+                                         ? capture.previewComplementCabSummary() + utf8(" · 보완")
+                                         : utf8("Standard EQ · 보완");
 
-        if (deviceLabel == "PreAmp")
-            blocks.push_back({ "Power", "Neutral", Kind::Complement });
-
-        if (capture.isPreviewCabinetEnabled())
+        if (device == "FullRig")
         {
-            const auto subtitle = capture.previewComplementCabUseCustom()
-                                ? capture.previewComplementCabSummary() + utf8(" · 보완")
-                                : utf8("Standard EQ · 보완");
-            blocks.push_back({ "Cab", subtitle, Kind::Complement });
+            blocks.push_back({ "Full Rig", utf8("패키지 · amp+cab 포함"), Kind::Package });
         }
-        else if (deviceLabel == "Pedal" || deviceLabel == "Effect")
+        else if (device == "PreAmp")
         {
-            blocks.push_back({ "Out chain", "FRFR", Kind::Complement });
+            blocks.push_back({ "PreAmp", utf8("패키지"), Kind::Package });
+            blocks.push_back({ "Power", utf8("Neutral · unity"), Kind::Complement });
+        }
+        else if (isPedal)
+        {
+            blocks.push_back({ "Pedal", utf8("패키지"), Kind::Package });
+        }
+        else
+        {
+            blocks.push_back({ device == "Amp" ? juce::String("Amp Head") : device,
+                               utf8("패키지"), Kind::Package });
+        }
+
+        // Pedal context: FRFR audition by default, or a neutral clean amp in
+        // front of the complement cab when the rig context is enabled.
+        if (isPedal)
+        {
+            if (cabOn)
+            {
+                blocks.push_back({ "Amp", utf8("Neutral clean · 보완"), Kind::Complement });
+                blocks.push_back({ "Cab", complementCabSubtitle, Kind::Complement });
+            }
+            else
+            {
+                blocks.push_back({ "Cab", utf8("FRFR · 무착색"), Kind::Complement });
+            }
+        }
+        else if (cabOn)
+        {
+            // Shown for full rig too when the user forces the toggle on, so
+            // the strip always matches what the audio chain renders.
+            blocks.push_back({ "Cab", complementCabSubtitle, Kind::Complement });
         }
     }
     else
