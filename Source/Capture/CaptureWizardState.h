@@ -21,6 +21,8 @@ struct CaptureStepResult
     float dryPeakDbfs { -120.0f };
     float dryRmsDbfs { -120.0f };
     float captureOutputDbfs { -120.0f };
+    juce::String testSignalType;
+    double testSignalDurationSeconds { 0.0 };
 };
 
 class CaptureWizardState final

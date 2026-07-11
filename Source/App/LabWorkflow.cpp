@@ -71,11 +71,13 @@ void LabWorkflow::runFidelityEvaluation(ModelExtractionResult& extraction)
         if (chunk->id.startsWith("capture/shared/sample-") && chunk->id.endsWith(".pcm16"))
             sampleIds.add(chunk->id.fromFirstOccurrenceOf("capture/shared/sample-", false, false)
                               .upToLastOccurrenceOf(".pcm16", false, false));
+        else if (chunk->id.endsWith("/sample-hanso-probe-reference.pcm16"))
+            sampleIds.addIfNotAlreadyThere("hanso-probe-reference");
     }
 
     if (sampleIds.isEmpty())
     {
-        appState.appendLog("Fidelity evaluation skipped: package has no amp-processed sample recordings.");
+        appState.appendLog("Fidelity evaluation skipped: package has no held-out probe or amp-processed sample recordings.");
         return;
     }
 
@@ -100,7 +102,10 @@ void LabWorkflow::runFidelityEvaluation(ModelExtractionResult& extraction)
             auto real = std::make_unique<juce::AudioBuffer<float>>();
             double drySampleRate = 0.0;
             double realSampleRate = 0.0;
-            if (! decodePcm16(package, "capture/shared/sample-" + sampleId + ".pcm16", *dry, drySampleRate)
+            const auto dryChunkId = sampleId == "hanso-probe-reference"
+                                  ? prefix + "/probe-reference-dry.pcm16"
+                                  : "capture/shared/sample-" + sampleId + ".pcm16";
+            if (! decodePcm16(package, dryChunkId, *dry, drySampleRate)
                 || ! decodePcm16(package, prefix + "/sample-" + sampleId + ".pcm16", *real, realSampleRate))
                 continue;
 
@@ -152,8 +157,19 @@ void LabWorkflow::runFidelityEvaluation(ModelExtractionResult& extraction)
         anchorReport->setProperty("esrBeforeDb", esrBeforeDb);
         anchorReport->setProperty("esrAfterDb", corrected ? esrAfterDb : esrBeforeDb);
         anchorReport->setProperty("corrected", corrected);
-        anchorReport->setProperty("adoptedSource", corrected ? "sample-esr-refinement" : "sweep-transfer-fit");
+        anchorReport->setProperty("adoptedSource", corrected ? "sample-esr-refinement" : "probe-transfer-fit");
         anchorReport->setProperty("samples", sampleReports);
+
+        juce::AudioBuffer<float> repeatStart;
+        juce::AudioBuffer<float> repeatEnd;
+        double repeatStartRate = 0.0;
+        double repeatEndRate = 0.0;
+        if (decodePcm16(package, prefix + "/probe-reference-a-start.pcm16", repeatStart, repeatStartRate)
+            && decodePcm16(package, prefix + "/probe-reference-a-end.pcm16", repeatEnd, repeatEndRate))
+        {
+            anchorReport->setProperty("repeatabilityEsrDb",
+                                      ModelFidelityEvaluator::esrDb(repeatStart, repeatEnd));
+        }
         anchorReports.add(anchorReport);
 
         appState.appendLog("Fidelity: gain " + juce::String(anchor.parameterValue * 100.0f, 0)

@@ -258,6 +258,52 @@ void setPcm16AudioChunk(HansoPackage& package,
                      buffer.getNumChannels(),
                      buffer.getNumSamples());
 }
+
+juce::AudioBuffer<float> concatenateModelFitSegments(const juce::AudioBuffer<float>& source,
+                                                      const std::vector<HansoProbeSegment>& segments)
+{
+    auto totalSamples = 0;
+    for (const auto& segment : segments)
+        if (segment.includeInModelFit() && segment.startSample < source.getNumSamples())
+            totalSamples += juce::jmin(segment.numSamples, source.getNumSamples() - segment.startSample);
+
+    juce::AudioBuffer<float> result(source.getNumChannels(), totalSamples);
+    result.clear();
+    auto cursor = 0;
+    for (const auto& segment : segments)
+    {
+        if (! segment.includeInModelFit() || segment.startSample >= source.getNumSamples())
+            continue;
+
+        const auto length = juce::jmin(segment.numSamples, source.getNumSamples() - segment.startSample);
+        for (int channel = 0; channel < source.getNumChannels(); ++channel)
+            result.copyFrom(channel, cursor, source, channel, segment.startSample, length);
+        cursor += length;
+    }
+    return result;
+}
+
+int modelFitEndSample(const std::vector<HansoProbeSegment>& segments) noexcept
+{
+    auto endSample = 0;
+    for (const auto& segment : segments)
+        if (segment.includeInModelFit())
+            endSample = juce::jmax(endSample, segment.startSample + segment.numSamples);
+    return endSample;
+}
+
+juce::AudioBuffer<float> copyProbeSegment(const juce::AudioBuffer<float>& source,
+                                          const HansoProbeSegment& segment)
+{
+    if (segment.startSample >= source.getNumSamples() || segment.numSamples <= 0)
+        return {};
+
+    const auto length = juce::jmin(segment.numSamples, source.getNumSamples() - segment.startSample);
+    juce::AudioBuffer<float> result(source.getNumChannels(), length);
+    for (int channel = 0; channel < source.getNumChannels(); ++channel)
+        result.copyFrom(channel, 0, source, channel, segment.startSample, length);
+    return result;
+}
 }
 
 CaptureEngine::CaptureEngine(ApplicationState& state, AudioEngine& audioEngine)
@@ -277,7 +323,9 @@ void CaptureEngine::generateTestSignal(TestSignalType type, double durationSecon
     TestSignalSpec spec;
     spec.type = type;
     spec.sampleRate = audio.currentSampleRate();
-    spec.durationSeconds = durationSeconds;
+    spec.durationSeconds = type == TestSignalType::HansoProbeA1
+                         ? TestSignalGenerator::hansoProbeDurationSeconds(spec.probeVariant)
+                         : durationSeconds;
     spec.amplitude = amplitude;
 
     auto drySignal = generator.generate(spec);
@@ -296,10 +344,10 @@ void CaptureEngine::generateTestSignal(TestSignalType type, double durationSecon
     package.captureSettings.inputChannels = captureChannels;
     package.captureSettings.outputChannels = 1;
     package.captureSettings.durationSeconds = spec.durationSeconds;
-    package.captureSettings.testSignalType = TestSignalGenerator::toString(spec.type);
+    package.captureSettings.testSignalType = TestSignalGenerator::toString(type);
     setPcm16AudioChunk(package, "capture/dry-reference.pcm16", "dryReference", session.dryReferenceSignal(), spec.sampleRate);
 
-    appState.appendLog("Generated test signal: " + TestSignalGenerator::toString(type));
+    appState.appendLog("Generated test signal: " + TestSignalGenerator::toString(spec));
 }
 
 void CaptureEngine::setCaptureInputChannel(int zeroBasedChannelIndex) noexcept
@@ -391,8 +439,6 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
     const auto routing = OutputRoutingPolicy::forCaptureMode(wizard.mode);
     audio.captureSource().setOutputRoutingMode(routing);
 
-    const auto isCalibration = stepId == "calibration";
-
     // Output level is mode-adjusted (see modeAdjustedOutputDb): Easy allows the
     // full dialed level once calibration has verified the path (its only gain
     // lever), Standard stays conservative because a reamp box provides the gain.
@@ -400,13 +446,25 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
     const auto amplitude = juce::Decibels::decibelsToGain(modeAdjustedOutputDb());
 
     TestSignalSpec spec;
-    spec.type = TestSignalType::LogSineSweep;
     spec.sampleRate = audio.currentSampleRate();
-    spec.durationSeconds = isCalibration ? 2.0 : 5.0;
     spec.amplitude = amplitude;
+    const auto useHansoProbe = step->anchor.probeVariant != CaptureProbeVariant::Default;
+    if (useHansoProbe)
+    {
+        spec.type = TestSignalType::HansoProbeA1;
+        spec.probeVariant = step->anchor.probeVariant == CaptureProbeVariant::HansoProbeA1Full
+                          ? HansoProbeVariant::Full
+                          : HansoProbeVariant::Delta;
+        spec.durationSeconds = TestSignalGenerator::hansoProbeDurationSeconds(spec.probeVariant);
+    }
+    else
+    {
+        spec.type = TestSignalType::LogSineSweep;
+        spec.durationSeconds = 5.0;
+    }
 
-    auto sweepSignal = generator.generate(spec);
-    const auto sweepSamples = sweepSignal.getNumSamples();
+    auto primarySignal = generator.generate(spec);
+    const auto primarySignalSamples = primarySignal.getNumSamples();
 
     auto& package = appState.currentPackage();
     configurePackageForCaptureType(package, wizard);
@@ -414,9 +472,12 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
     // Sample injection: gain anchors also play the preview samples through
     // the device so the extracted model can be verified and refined against
     // real program material. Samples are peak-normalized to the same
-    // calibrated amplitude as the sweep — never louder.
+    // calibrated amplitude as the primary probe — never louder.
     activeSampleSegments.clear();
-    activeSweepSamples = 0;
+    activeProbeSegments = useHansoProbe
+                        ? TestSignalGenerator::hansoProbeSegments(spec.probeVariant, spec.sampleRate)
+                        : std::vector<HansoProbeSegment> {};
+    activePrimarySignalSamples = primarySignalSamples;
     juce::AudioBuffer<float> outputSignal;
     if (step->anchor.parameterKey == "gain")
     {
@@ -424,15 +485,15 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
         if (! injection.empty())
         {
             const auto gapSamples = juce::jmax(1, static_cast<int>(spec.sampleRate * 0.5));
-            auto totalSamples = sweepSamples + gapSamples;
+            auto totalSamples = primarySignalSamples + gapSamples;
             for (const auto& sample : injection)
                 totalSamples += gapSamples + sample.buffer.getNumSamples();
 
             outputSignal.setSize(1, totalSamples);
             outputSignal.clear();
-            outputSignal.copyFrom(0, 0, sweepSignal, 0, 0, sweepSamples);
+            outputSignal.copyFrom(0, 0, primarySignal, 0, 0, primarySignalSamples);
 
-            auto cursor = sweepSamples;
+            auto cursor = primarySignalSamples;
             for (auto& sample : injection)
             {
                 cursor += gapSamples;
@@ -445,9 +506,8 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
                     setPcm16AudioChunk(package, sharedId, "drySample", sample.buffer, spec.sampleRate);
             }
 
-            activeSweepSamples = sweepSamples;
             appState.appendLog("Sample injection: " + juce::String(static_cast<int>(injection.size()))
-                               + " preview sample(s) will play after the sweep.");
+                               + " preview sample(s) will play after the primary probe.");
         }
         else
         {
@@ -456,15 +516,33 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
     }
 
     if (outputSignal.getNumSamples() == 0)
-        outputSignal.makeCopyOf(sweepSignal, true);
+        outputSignal.makeCopyOf(primarySignal, true);
 
     // Safety note: the generated output still uses the calibrated dBFS level
     // plus Easy-mode limiting above. The per-anchor dry reference stays
-    // sweep-only so model extraction compares each return against exactly the
-    // sweep that was sent — the sample segments live in their own chunks.
+    // analysis/training-only so held-out probe references and injected preview
+    // samples cannot leak into model fitting.
     const auto dryChunkId = dryChunkIdForStep(*step);
+    auto modelDrySignal = activeProbeSegments.empty()
+                        ? primarySignal
+                        : concatenateModelFitSegments(primarySignal, activeProbeSegments);
     if (! dryChunkIsSharedForStep(*step) || package.findChunk(dryChunkId) == nullptr)
-        setPcm16AudioChunk(package, dryChunkId, "dryReference", sweepSignal, spec.sampleRate);
+        setPcm16AudioChunk(package, dryChunkId, "dryReference", modelDrySignal, spec.sampleRate);
+
+    if (! activeProbeSegments.empty())
+    {
+        for (const auto& segment : activeProbeSegments)
+        {
+            if (segment.purpose != HansoProbeSegmentPurpose::Validation)
+                continue;
+
+            const auto referenceDry = copyProbeSegment(primarySignal, segment);
+            const auto prefix = dryChunkId.upToLastOccurrenceOf("/dry-reference", false, false);
+            setPcm16AudioChunk(package, prefix + "/probe-reference-dry.pcm16",
+                               "probeValidationDry", referenceDry, spec.sampleRate);
+            break;
+        }
+    }
 
     audio.captureSource().loadCaptureSignal(outputSignal);
     const auto captureChannels = audio.captureSource().captureChannelCount();
@@ -478,7 +556,8 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
     package.captureSettings.inputChannels = captureChannels;
     package.captureSettings.outputChannels = package.metadata.numOutputChannels;
     package.captureSettings.durationSeconds = spec.durationSeconds;
-    package.captureSettings.testSignalType = TestSignalGenerator::toString(spec.type);
+    package.captureSettings.testSignalType = useHansoProbe ? "HansoProbeA1"
+                                                          : TestSignalGenerator::toString(spec);
 
     if (isCabinetPositionStep(*step))
         wizard.markCabinetSlotCapturing(stepId);
@@ -529,6 +608,9 @@ void CaptureEngine::resetCaptureStep(const juce::String& stepId)
         audio.captureSource().stopCapture();
         session.reset();
         activeStepId.clear();
+        activeSampleSegments.clear();
+        activeProbeSegments.clear();
+        activePrimarySignalSamples = 0;
     }
 
     auto& package = appState.currentPackage();
@@ -536,6 +618,15 @@ void CaptureEngine::resetCaptureStep(const juce::String& stepId)
         package.removeChunk(dryChunkIdForStep(*step));
     package.removeChunk(capturedChunkIdForStep(*step));
     package.removeChunk(alignedChunkIdForStep(*step));
+    if (step->isAnchorCapture())
+    {
+        const auto prefix = step->anchor.chunkPathPrefix();
+        package.removeChunk(prefix + "/probe-reference-dry.pcm16");
+        package.removeChunk(prefix + "/probe-reference-a-start.pcm16");
+        package.removeChunk(prefix + "/probe-reference-a-end.pcm16");
+        package.removeChunk(prefix + "/probe-reference-a.pcm16");
+        package.removeChunk(prefix + "/sample-hanso-probe-reference.pcm16");
+    }
     if (isCabinetPositionStep(*step))
         wizard.resetCabinetSlot(stepId);
     wizard.removeResult(stepId);
@@ -1059,6 +1150,9 @@ void CaptureEngine::stop()
         session.reset();
         appState.appendLog("Guided capture stopped before completion: " + activeStepId);
         activeStepId.clear();
+        activeSampleSegments.clear();
+        activeProbeSegments.clear();
+        activePrimarySignalSamples = 0;
         return;
     }
 
@@ -1082,7 +1176,8 @@ void CaptureEngine::reset()
     clearPreviewModel();
     activeStepId.clear();
     activeSampleSegments.clear();
-    activeSweepSamples = 0;
+    activeProbeSegments.clear();
+    activePrimarySignalSamples = 0;
     calibrationSafeTicks = 0;
     calibrationPhase = CalibrationMonitorPhase::Idle;
     calibrationMuteWindowActive = false;
@@ -1115,18 +1210,78 @@ void CaptureEngine::refresh()
                 setAudioChunk(package, capturedChunkId, "captured", session.capturedSignal(), session.getSampleRate());
 
             const auto& alignedFull = session.alignedCapturedSignal();
-            if (activeSweepSamples > 0 && alignedFull.getNumSamples() > 0)
+            if (activePrimarySignalSamples > 0 && alignedFull.getNumSamples() > 0)
             {
                 // Composite capture: the aligned recording is sliced back into
-                // the sweep response (kept under the usual aligned chunk id so
-                // model extraction is unaffected) and per-sample responses.
-                const auto sweepLength = juce::jmin(activeSweepSamples, alignedFull.getNumSamples());
-                juce::AudioBuffer<float> sweepSlice(alignedFull.getNumChannels(), sweepLength);
+                // model-fit probe regions, held-out validation references, and
+                // optional per-sample responses.
+                const auto primaryLength = juce::jmin(activePrimarySignalSamples, alignedFull.getNumSamples());
+                juce::AudioBuffer<float> primarySlice(alignedFull.getNumChannels(), primaryLength);
                 for (int channel = 0; channel < alignedFull.getNumChannels(); ++channel)
-                    sweepSlice.copyFrom(channel, 0, alignedFull, channel, 0, sweepLength);
-                setPcm16AudioChunk(package, alignedChunkId, "alignedCaptured", sweepSlice, session.getSampleRate());
+                    primarySlice.copyFrom(channel, 0, alignedFull, channel, 0, primaryLength);
+
+                auto modelSlice = activeProbeSegments.empty()
+                                ? primarySlice
+                                : concatenateModelFitSegments(primarySlice, activeProbeSegments);
+
+                const auto requiredFitEnd = modelFitEndSample(activeProbeSegments);
+                if (requiredFitEnd > 0 && primarySlice.getNumSamples() < requiredFitEnd)
+                {
+                    const auto& dryFull = session.dryReferenceSignal();
+                    const auto dryPrimaryLength = juce::jmin(primarySlice.getNumSamples(),
+                                                             juce::jmin(activePrimarySignalSamples,
+                                                                        dryFull.getNumSamples()));
+                    juce::AudioBuffer<float> dryPrimary(dryFull.getNumChannels(), dryPrimaryLength);
+                    for (int channel = 0; channel < dryFull.getNumChannels(); ++channel)
+                        dryPrimary.copyFrom(channel, 0, dryFull, channel, 0, dryPrimaryLength);
+                    const auto clippedDry = concatenateModelFitSegments(dryPrimary, activeProbeSegments);
+                    setPcm16AudioChunk(package, dryChunkId, "dryReference", clippedDry, session.getSampleRate());
+                    appState.appendLog("HANSO Probe warning: capture ended inside model-fit data; dry and return "
+                                       "were cropped to the same " + juce::String(modelSlice.getNumSamples())
+                                       + " samples. Re-capture this anchor for full accuracy.");
+                }
+                setPcm16AudioChunk(package, alignedChunkId, "alignedCaptured", modelSlice, session.getSampleRate());
 
                 const auto stepPrefix = alignedChunkId.upToLastOccurrenceOf("/aligned-captured", false, false);
+                const auto fidelityReferenceId = session.getTestSignalSpec().probeVariant == HansoProbeVariant::Full
+                                                ? juce::String("reference-a-end")
+                                                : juce::String("reference-a");
+                auto fidelityReferenceStored = false;
+                for (const auto& segment : activeProbeSegments)
+                {
+                    if (segment.purpose != HansoProbeSegmentPurpose::Validation)
+                        continue;
+
+                    const auto probeChunkId = stepPrefix + "/probe-" + segment.id + ".pcm16";
+                    if (segment.startSample + segment.numSamples > primarySlice.getNumSamples())
+                    {
+                        package.removeChunk(probeChunkId);
+                        continue;
+                    }
+
+                    const auto validationSlice = copyProbeSegment(primarySlice, segment);
+                    setPcm16AudioChunk(package,
+                                       probeChunkId,
+                                       "probeValidationReal",
+                                       validationSlice,
+                                       session.getSampleRate());
+                    if (segment.id == fidelityReferenceId)
+                    {
+                        setPcm16AudioChunk(package,
+                                           stepPrefix + "/sample-hanso-probe-reference.pcm16",
+                                           "ampProcessedSample",
+                                           validationSlice,
+                                           session.getSampleRate());
+                        fidelityReferenceStored = true;
+                    }
+                }
+                if (! activeProbeSegments.empty() && ! fidelityReferenceStored)
+                {
+                    package.removeChunk(stepPrefix + "/sample-hanso-probe-reference.pcm16");
+                    appState.appendLog("HANSO Probe warning: held-out end reference was incomplete; "
+                                       "probe fidelity refinement will be skipped for this anchor.");
+                }
+
                 for (const auto& segment : activeSampleSegments)
                 {
                     if (segment.startSample + segment.numSamples <= alignedFull.getNumSamples())
@@ -1175,6 +1330,8 @@ void CaptureEngine::refresh()
             result.dryPeakDbfs = peakDb(session.dryReferenceSignal());
             result.dryRmsDbfs = rmsDb(session.dryReferenceSignal());
             result.captureOutputDbfs = juce::Decibels::gainToDecibels(session.getTestSignalSpec().amplitude, -120.0f);
+            result.testSignalType = TestSignalGenerator::toString(session.getTestSignalSpec());
+            result.testSignalDurationSeconds = session.getTestSignalSpec().durationSeconds;
             wizard.storeResult(result);
             appState.markCaptureDataDirty();
 

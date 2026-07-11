@@ -2,6 +2,8 @@
 // Every check runs on synthetic signals with known ground truth, so a failure
 // means the analysis math regressed, not that hardware behaved unexpectedly.
 
+#include <cstring>
+
 #include <JuceHeader.h>
 
 #include "Analysis/CabinetMicMatrixEstimator.h"
@@ -64,6 +66,26 @@ juce::AudioBuffer<float> makeMultiSine(double seconds, float amplitude)
     spec.durationSeconds = seconds;
     spec.amplitude = amplitude;
     return hanso::TestSignalGenerator().generate(spec);
+}
+
+juce::AudioBuffer<float> makeHansoProbe(hanso::HansoProbeVariant variant, float amplitude)
+{
+    hanso::TestSignalSpec spec;
+    spec.type = hanso::TestSignalType::HansoProbeA1;
+    spec.probeVariant = variant;
+    spec.sampleRate = sampleRate;
+    spec.durationSeconds = hanso::TestSignalGenerator::hansoProbeDurationSeconds(variant);
+    spec.amplitude = amplitude;
+    return hanso::TestSignalGenerator().generate(spec);
+}
+
+const hanso::HansoProbeSegment* findProbeSegment(const std::vector<hanso::HansoProbeSegment>& segments,
+                                                 const juce::String& id)
+{
+    for (const auto& segment : segments)
+        if (segment.id == id)
+            return &segment;
+    return nullptr;
 }
 
 float rmsDbfs(const juce::AudioBuffer<float>& buffer)
@@ -152,6 +174,77 @@ void testFullSpectrumCoverage()
     check(highDb > -60.0f, "spectrum covers high band", "highDb=" + juce::String(highDb, 1));
     check(std::abs(lowDb - midDb) < 15.0f, "sweep band balance low/mid",
           juce::String(lowDb, 1) + " vs " + juce::String(midDb, 1));
+}
+
+void testHansoProbeA1()
+{
+    constexpr auto ceiling = 0.25f;
+    const auto full = makeHansoProbe(hanso::HansoProbeVariant::Full, ceiling);
+    const auto delta = makeHansoProbe(hanso::HansoProbeVariant::Delta, ceiling);
+    const auto fullSegments = hanso::TestSignalGenerator::hansoProbeSegments(hanso::HansoProbeVariant::Full,
+                                                                              sampleRate);
+    const auto deltaSegments = hanso::TestSignalGenerator::hansoProbeSegments(hanso::HansoProbeVariant::Delta,
+                                                                               sampleRate);
+
+    check(full.getNumSamples() == static_cast<int>(24.5 * sampleRate),
+          "HANSO Probe A1 full duration is 24.5 seconds");
+    check(delta.getNumSamples() == static_cast<int>(10.0 * sampleRate),
+          "HANSO Probe A1 delta duration is 10 seconds");
+    check(full.getMagnitude(0, 0, full.getNumSamples()) <= ceiling + 1.0e-6f,
+          "HANSO Probe A1 respects calibrated peak ceiling");
+
+    auto fullFitSamples = 0;
+    for (const auto& segment : fullSegments)
+        if (segment.includeInModelFit())
+            fullFitSamples += segment.numSamples;
+    auto deltaFitSamples = 0;
+    for (const auto& segment : deltaSegments)
+        if (segment.includeInModelFit())
+            deltaFitSamples += segment.numSamples;
+    check(fullFitSamples == static_cast<int>(18.5 * sampleRate),
+          "full probe exposes 18.5 seconds of model-fit data");
+    check(deltaFitSamples == static_cast<int>(6.0 * sampleRate),
+          "delta probe exposes 6 seconds of model-fit data");
+
+    const auto* startReference = findProbeSegment(fullSegments, "reference-a-start");
+    const auto* endReference = findProbeSegment(fullSegments, "reference-a-end");
+    auto maxReferenceDifference = 0.0f;
+    if (startReference != nullptr && endReference != nullptr)
+        for (int sample = 0; sample < startReference->numSamples; ++sample)
+            maxReferenceDifference = juce::jmax(maxReferenceDifference,
+                                                 std::abs(full.getSample(0, startReference->startSample + sample)
+                                                          - full.getSample(0, endReference->startSample + sample)));
+    check(startReference != nullptr && endReference != nullptr && maxReferenceDifference <= 1.0e-7f,
+          "full probe repeats an exact held-out drift reference");
+
+    const auto* ladder = findProbeSegment(fullSegments, "level-ladder");
+    auto ladderMonotonic = ladder != nullptr;
+    auto previousRms = -120.0f;
+    if (ladder != nullptr)
+    {
+        const auto stepSamples = ladder->numSamples / 6;
+        for (auto step = 0; step < 6; ++step)
+        {
+            const auto rms = full.getRMSLevel(0, ladder->startSample + step * stepSamples, stepSamples);
+            const auto rmsDb = juce::Decibels::gainToDecibels(rms, -120.0f);
+            if (step > 0 && rmsDb <= previousRms + 2.5f)
+                ladderMonotonic = false;
+            previousRms = rmsDb;
+        }
+    }
+    check(ladderMonotonic, "HANSO Probe A1 level ladder rises monotonically");
+
+    const auto duplicate = makeHansoProbe(hanso::HansoProbeVariant::Full, ceiling);
+    const auto deterministic = duplicate.getNumSamples() == full.getNumSamples()
+                            && std::memcmp(full.getReadPointer(0), duplicate.getReadPointer(0),
+                                           static_cast<size_t>(full.getNumSamples()) * sizeof(float)) == 0;
+    check(deterministic, "HANSO Probe A1 generation is deterministic");
+
+    const hanso::AveragedPowerSpectrum spectrum(full, sampleRate);
+    check(spectrum.bandPowerDb(60.0, 250.0) > -70.0f
+              && spectrum.bandPowerDb(250.0, 2500.0) > -70.0f
+              && spectrum.bandPowerDb(2500.0, 10000.0) > -70.0f,
+          "HANSO Probe A1 covers low, mid, and high analysis bands");
 }
 
 void testAlignmentOffset()
@@ -1097,12 +1190,47 @@ void testHighGainFirstUnlockChain()
     const auto* calibration = wizard.findStep("calibration");
     check(calibration != nullptr && calibration->instructionText.contains(juce::String::fromUTF8("100%")),
           "calibration instruction references gain 100%");
+
+    const auto* fullStep = wizard.findStep("gain-100");
+    const auto* midStep = wizard.findStep("gain-050");
+    const auto* lowStep = wizard.findStep("gain-010");
+    check(fullStep != nullptr && midStep != nullptr && lowStep != nullptr
+              && fullStep->anchor.probeVariant == hanso::CaptureProbeVariant::HansoProbeA1Full
+              && midStep->anchor.probeVariant == hanso::CaptureProbeVariant::HansoProbeA1Delta
+              && lowStep->anchor.probeVariant == hanso::CaptureProbeVariant::HansoProbeA1Delta,
+          "amp recipe declares Full/Delta probe variants explicitly");
+
+    hanso::CaptureStepResult probeResult;
+    probeResult.stepId = "gain-100";
+    probeResult.status = hanso::CaptureStepStatus::Passed;
+    probeResult.testSignalType = "HansoProbeA1Full";
+    probeResult.testSignalDurationSeconds = 24.5;
+    wizard.storeResult(probeResult);
+    const auto metadata = wizard.toMetadataVar();
+    const auto* metadataObject = metadata.getDynamicObject();
+    const auto captureRecipe = metadataObject != nullptr ? metadataObject->getProperty("captureRecipe") : juce::var();
+    const auto* recipeObject = captureRecipe.getDynamicObject();
+    const auto anchors = recipeObject != nullptr ? recipeObject->getProperty("anchors") : juce::var();
+    const auto* anchorArray = anchors.getArray();
+    const juce::DynamicObject* serializedFullAnchor = nullptr;
+    if (anchorArray != nullptr)
+        for (const auto& anchor : *anchorArray)
+            if (const auto* object = anchor.getDynamicObject())
+                if (object->getProperty("displayLabel").toString() == "Gain 100%")
+                    serializedFullAnchor = object;
+
+    check(serializedFullAnchor != nullptr
+              && serializedFullAnchor->getProperty("probeVariant").toString() == "HansoProbeA1Full"
+              && serializedFullAnchor->getProperty("testSignalType").toString() == "HansoProbeA1Full"
+              && std::abs(static_cast<double>(serializedFullAnchor->getProperty("testSignalDurationSeconds")) - 24.5) < 1.0e-9,
+          "capture workflow records per-anchor probe variant and duration");
 }
 }
 
 int main()
 {
     testFullSpectrumCoverage();
+    testHansoProbeA1();
     testAlignmentOffset();
     testDriveExtraction();
     testLinearSystemGivesLowDrive();

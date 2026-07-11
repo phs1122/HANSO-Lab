@@ -131,7 +131,7 @@ private:
     EasyCaptureSafetyPolicy easyPolicy;
     juce::String activeStepId;
     // Sample-injection layout of the active anchor capture: the composite
-    // output is sweep + gaps + preview samples, and these offsets let
+    // output is primary probe + gaps + preview samples, and these offsets let
     // refresh() slice the aligned recording back into per-sample chunks.
     struct ActiveSampleSegment
     {
@@ -140,7 +140,8 @@ private:
         int numSamples { 0 };
     };
     std::vector<ActiveSampleSegment> activeSampleSegments;
-    int activeSweepSamples { 0 };
+    std::vector<HansoProbeSegment> activeProbeSegments;
+    int activePrimarySignalSamples { 0 };
     float userCalibrationOutputDb { -33.0f };
     int calibrationSafeTicks { 0 };
     CalibrationMonitorPhase calibrationPhase { CalibrationMonitorPhase::Idle };

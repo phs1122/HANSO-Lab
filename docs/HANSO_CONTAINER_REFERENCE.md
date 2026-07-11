@@ -79,7 +79,7 @@ hanso-dsp loader가 새 `.hanso`를 읽을 수 있는지, Amp Forge가 사용할
 
 ## `cabProfile` 마이크 메타데이터와 micMatrix (additive)
 
-Cabinet 패키지의 `cabProfile`은 다음 additive 필드를 가질 수 있다. 상세 스키마는 공식 명세 7.1을 따른다.
+Cabinet 패키지의 `cabProfile`은 다음 additive 필드를 가질 수 있다. 상세 스키마는 공식 명세 7.2를 따른다.
 
 - `positions[].micClass` — real source slot의 마이크 클래스 (`dynamic` / `ribbon` / `condenser`, 미상이면 void)
 - `positions[].micModel` — 자유 텍스트 마이크 모델명 (미입력 시 void)
@@ -89,7 +89,21 @@ Cabinet 패키지의 `cabProfile`은 다음 additive 필드를 가질 수 있다
 
 ## `modelData.chainCoverage` (additive)
 
-캡쳐가 체인의 어느 스테이지를 담고 있는지 명시하는 optional 문자열 배열이다. 공식 명세 7.2를 따른다. FullRig=`["amp","cabinet"]`, Amp=`["amp"]`, PreAmp=`["preamp"]`, Pedal/Effect=`["pedal"]`, Cabinet=`["cabinet"]`. 소비자는 이 필드로 무엇을 보완해 렌더링할지 결정하고, 없으면 `deviceType`/`category`로 폴백한다. Tone Preview의 보완 체인 정책(`Source/Preview/PreviewChainPolicy.h`)과 의미가 일치해야 한다.
+캡쳐가 체인의 어느 스테이지를 담고 있는지 명시하는 optional 문자열 배열이다. 공식 명세 7.3을 따른다. FullRig=`["amp","cabinet"]`, Amp=`["amp"]`, PreAmp=`["preamp"]`, Pedal/Effect=`["pedal"]`, Cabinet=`["cabinet"]`. 소비자는 이 필드로 무엇을 보완해 렌더링할지 결정하고, 없으면 `deviceType`/`category`로 폴백한다. Tone Preview의 보완 체인 정책(`Source/Preview/PreviewChainPolicy.h`)과 의미가 일치해야 한다.
+
+## HANSO Probe A1 capture artifacts (additive)
+
+Amp Gain anchor workflow는 `metadata.captureSettings.testSignalType`에 `HansoProbeA1`을 기록한다. `captureWorkflow.captureRecipe.anchors[]`의 `probeVariant`와 `testSignalType`은 anchor별 `HansoProbeA1Full` 또는 `HansoProbeA1Delta`, `testSignalDurationSeconds`는 각각 24.5 또는 10.0을 기록한다. 파형과 segment 역할의 정본은 `docs/HANSO_PROBE_A1.md`이다.
+
+Anchor별 optional probe validation chunks:
+
+- `capture/gain-<anchor>/probe-reference-dry.pcm16` — held-out dry reference, role `probeValidationDry`
+- `capture/gain-<anchor>/probe-reference-a-start.pcm16` — Full 시작 실측 reference, role `probeValidationReal`
+- `capture/gain-<anchor>/probe-reference-a-end.pcm16` — Full 종료 실측 reference, role `probeValidationReal`
+- `capture/gain-<anchor>/probe-reference-a.pcm16` — Delta 실측 reference, role `probeValidationReal`
+- `capture/gain-<anchor>/sample-hanso-probe-reference.pcm16` — fidelity evaluator가 소비하는 held-out 실측 reference, role `ampProcessedSample`
+
+Full의 시작/종료 실측 reference가 모두 있으면 `captureFidelity.anchors[].repeatabilityEsrDb`를 기록할 수 있다. 이 값은 모델 출력 ESR이 아니라 동일한 dry reference에 대한 장비의 시작/종료 repeatability ESR이다. 알 수 없는 소비자는 이 metadata와 chunks를 무시할 수 있으며 기존 compact model chunk의 runtime semantics는 변하지 않는다.
 
 ## CaptureFirstHybrid 원칙
 

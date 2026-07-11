@@ -14,11 +14,31 @@ enum class CaptureStepStatus
     Failed
 };
 
+enum class CaptureProbeVariant
+{
+    Default,
+    HansoProbeA1Full,
+    HansoProbeA1Delta
+};
+
+inline juce::String toString(CaptureProbeVariant variant)
+{
+    switch (variant)
+    {
+        case CaptureProbeVariant::Default: return "Default";
+        case CaptureProbeVariant::HansoProbeA1Full: return "HansoProbeA1Full";
+        case CaptureProbeVariant::HansoProbeA1Delta: return "HansoProbeA1Delta";
+    }
+
+    return "Default";
+}
+
 struct CaptureAnchor
 {
     juce::String parameterKey;
     float normalizedValue { 0.0f };
     juce::String displayLabel;
+    CaptureProbeVariant probeVariant { CaptureProbeVariant::Default };
 
     juce::String chunkPathPrefix() const
     {

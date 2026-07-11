@@ -224,6 +224,8 @@ juce::var CaptureWizardState::toMetadataVar() const
         anchor->setProperty("normalizedValue", step.anchor.normalizedValue);
         anchor->setProperty("displayLabel", step.anchor.displayLabel);
         anchor->setProperty("status", toString(step.status));
+        if (step.anchor.probeVariant != CaptureProbeVariant::Default)
+            anchor->setProperty("probeVariant", toString(step.anchor.probeVariant));
 
         if (const auto* result = findResult(step.stepId))
         {
@@ -231,6 +233,8 @@ juce::var CaptureWizardState::toMetadataVar() const
             anchor->setProperty("capturedChunkId", result->capturedChunkId);
             anchor->setProperty("alignedChunkId", result->alignedChunkId);
             anchor->setProperty("quality", qualityToVar(result->quality));
+            anchor->setProperty("testSignalType", result->testSignalType);
+            anchor->setProperty("testSignalDurationSeconds", result->testSignalDurationSeconds);
 
             auto levelMetadata = new juce::DynamicObject();
             levelMetadata->setProperty("dryPeakDbfs", result->dryPeakDbfs);
