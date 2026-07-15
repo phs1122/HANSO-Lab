@@ -4,6 +4,7 @@
 #include "Analysis/CabinetToneProfiler.h"
 #include "App/Utf8.h"
 #include "Audio/AudioMetrics.h"
+#include "Capture/CabinetIrExtractor.h"
 #include "Capture/CabinetIrImporter.h"
 #include "Capture/CabinetMessages.h"
 #include "Capture/CaptureStepUtils.h"
@@ -223,37 +224,22 @@ CaptureQualityTarget qualityTargetForStep(const CaptureStep& step)
     return { -42.0f, -8.0f, "Gain 50%" };
 }
 
+// Master/analysis audio (model-fit inputs, fidelity references, de-embedding
+// IRs) is stored as float32 — conversion- and dither-free, clip-safe. All
+// capture recordings currently feed analysis, so they use this tier.
 void setAudioChunk(HansoPackage& package,
                    const juce::String& id,
                    const juce::String& role,
                    const juce::AudioBuffer<float>& buffer,
                    double sampleRate)
 {
-    if (buffer.getNumChannels() == 0 || buffer.getNumSamples() == 0)
-        return;
-
-    package.setChunk(id,
-                     role,
-                     "audio/x-hanso-float32",
-                     HansoAudioChunkCodec::encodeFloat32Audio(buffer, sampleRate),
-                     sampleRate,
-                     buffer.getNumChannels(),
-                     buffer.getNumSamples());
-}
-
-void setPcm16AudioChunk(HansoPackage& package,
-                        const juce::String& id,
-                        const juce::String& role,
-                        const juce::AudioBuffer<float>& buffer,
-                        double sampleRate)
-{
     if (id.isEmpty() || buffer.getNumChannels() == 0 || buffer.getNumSamples() == 0)
         return;
 
     package.setChunk(id,
                      role,
-                     "audio/x-hanso-pcm16",
-                     HansoAudioChunkCodec::encodePcm16Audio(buffer, sampleRate),
+                     mediaType::float32Audio,
+                     HansoAudioChunkCodec::encodeFloat32Audio(buffer, sampleRate),
                      sampleRate,
                      buffer.getNumChannels(),
                      buffer.getNumSamples());
@@ -325,6 +311,8 @@ void CaptureEngine::generateTestSignal(TestSignalType type, double durationSecon
     spec.sampleRate = audio.currentSampleRate();
     spec.durationSeconds = type == TestSignalType::HansoProbeA1
                          ? TestSignalGenerator::hansoProbeDurationSeconds(spec.probeVariant)
+                         : type == TestSignalType::CabinetProbeC1
+                         ? TestSignalGenerator::cabinetProbeDurationSeconds()
                          : durationSeconds;
     spec.amplitude = amplitude;
 
@@ -345,7 +333,7 @@ void CaptureEngine::generateTestSignal(TestSignalType type, double durationSecon
     package.captureSettings.outputChannels = 1;
     package.captureSettings.durationSeconds = spec.durationSeconds;
     package.captureSettings.testSignalType = TestSignalGenerator::toString(type);
-    setPcm16AudioChunk(package, "capture/dry-reference.pcm16", "dryReference", session.dryReferenceSignal(), spec.sampleRate);
+    setAudioChunk(package, "capture/dry-reference.f32", "dryReference", session.dryReferenceSignal(), spec.sampleRate);
 
     appState.appendLog("Generated test signal: " + TestSignalGenerator::toString(spec));
 }
@@ -448,7 +436,9 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
     TestSignalSpec spec;
     spec.sampleRate = audio.currentSampleRate();
     spec.amplitude = amplitude;
-    const auto useHansoProbe = step->anchor.probeVariant != CaptureProbeVariant::Default;
+    const auto useHansoProbe = step->anchor.probeVariant == CaptureProbeVariant::HansoProbeA1Full
+                            || step->anchor.probeVariant == CaptureProbeVariant::HansoProbeA1Delta;
+    const auto useCabinetProbe = step->anchor.probeVariant == CaptureProbeVariant::CabinetProbeC1;
     if (useHansoProbe)
     {
         spec.type = TestSignalType::HansoProbeA1;
@@ -456,6 +446,11 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
                           ? HansoProbeVariant::Full
                           : HansoProbeVariant::Delta;
         spec.durationSeconds = TestSignalGenerator::hansoProbeDurationSeconds(spec.probeVariant);
+    }
+    else if (useCabinetProbe)
+    {
+        spec.type = TestSignalType::CabinetProbeC1;
+        spec.durationSeconds = TestSignalGenerator::cabinetProbeDurationSeconds();
     }
     else
     {
@@ -501,9 +496,9 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
                 outputSignal.copyFrom(0, cursor, sample.buffer, 0, 0, sample.buffer.getNumSamples());
                 cursor += sample.buffer.getNumSamples();
 
-                const auto sharedId = "capture/shared/sample-" + sample.id + ".pcm16";
+                const auto sharedId = "capture/shared/sample-" + sample.id + ".f32";
                 if (package.findChunk(sharedId) == nullptr)
-                    setPcm16AudioChunk(package, sharedId, "drySample", sample.buffer, spec.sampleRate);
+                    setAudioChunk(package, sharedId, "drySample", sample.buffer, spec.sampleRate);
             }
 
             appState.appendLog("Sample injection: " + juce::String(static_cast<int>(injection.size()))
@@ -527,7 +522,7 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
                         ? primarySignal
                         : concatenateModelFitSegments(primarySignal, activeProbeSegments);
     if (! dryChunkIsSharedForStep(*step) || package.findChunk(dryChunkId) == nullptr)
-        setPcm16AudioChunk(package, dryChunkId, "dryReference", modelDrySignal, spec.sampleRate);
+        setAudioChunk(package, dryChunkId, "dryReference", modelDrySignal, spec.sampleRate);
 
     if (! activeProbeSegments.empty())
     {
@@ -538,7 +533,7 @@ void CaptureEngine::startCaptureStep(const juce::String& stepId)
 
             const auto referenceDry = copyProbeSegment(primarySignal, segment);
             const auto prefix = dryChunkId.upToLastOccurrenceOf("/dry-reference", false, false);
-            setPcm16AudioChunk(package, prefix + "/probe-reference-dry.pcm16",
+            setAudioChunk(package, prefix + "/probe-reference-dry.f32",
                                "probeValidationDry", referenceDry, spec.sampleRate);
             break;
         }
@@ -621,11 +616,18 @@ void CaptureEngine::resetCaptureStep(const juce::String& stepId)
     if (step->isAnchorCapture())
     {
         const auto prefix = step->anchor.chunkPathPrefix();
-        package.removeChunk(prefix + "/probe-reference-dry.pcm16");
-        package.removeChunk(prefix + "/probe-reference-a-start.pcm16");
-        package.removeChunk(prefix + "/probe-reference-a-end.pcm16");
-        package.removeChunk(prefix + "/probe-reference-a.pcm16");
-        package.removeChunk(prefix + "/sample-hanso-probe-reference.pcm16");
+        // Remove both the current (.f32) and legacy (.pcm16) encodings so a
+        // re-capture over an older asset does not leave a stale copy behind.
+        const auto removeAudio = [&package](const juce::String& baseId)
+        {
+            package.removeChunk(baseId + ".f32");
+            package.removeChunk(baseId + ".pcm16");
+        };
+        removeAudio(prefix + "/probe-reference-dry");
+        removeAudio(prefix + "/probe-reference-a-start");
+        removeAudio(prefix + "/probe-reference-a-end");
+        removeAudio(prefix + "/probe-reference-a");
+        removeAudio(prefix + "/sample-hanso-probe-reference");
     }
     if (isCabinetPositionStep(*step))
         wizard.resetCabinetSlot(stepId);
@@ -665,7 +667,7 @@ bool CaptureEngine::importCabinetIrForStep(const juce::String& stepId,
     configurePackageForCaptureType(package, wizard);
     package.metadata.sampleRate = result.sampleRate;
     const auto chunkId = alignedChunkIdForStep(*step);
-    setPcm16AudioChunk(package, chunkId, "cabinet-ir", result.impulseResponse, result.sampleRate);
+    setAudioChunk(package, chunkId, "cabinet-ir", result.impulseResponse, result.sampleRate);
 
     CaptureQualityReport quality;
     quality.overallSeverity = CaptureQualitySeverity::Good;
@@ -718,9 +720,9 @@ bool CaptureEngine::buildCabinetFromSlots()
         juce::AudioBuffer<float> impulseResponse;
         double irSampleRate = 0.0;
         juce::String decodeError;
-        const auto* chunk = package.findChunk(slot.impulseResponseChunkId);
+        const auto* chunk = HansoAudioChunkCodec::findAudioChunk(package, slot.impulseResponseChunkId);
         if (chunk == nullptr
-            || ! HansoAudioChunkCodec::decodePcm16Audio(chunk->data, impulseResponse, irSampleRate, decodeError))
+            || ! HansoAudioChunkCodec::decodeAudio(chunk->mediaType, chunk->data, impulseResponse, irSampleRate, decodeError))
         {
             appState.appendLog("Tone profile skipped for " + slot.label + ": "
                                + (chunk == nullptr ? "missing IR chunk" : decodeError));
@@ -1206,6 +1208,9 @@ void CaptureEngine::refresh()
             const auto dryChunkId = dryChunkIdForStep(*step);
             const auto capturedChunkId = capturedChunkIdForStep(*step);
             const auto alignedChunkId = alignedChunkIdForStep(*step);
+            const auto cabinetPosition = isCabinetPositionStep(*step);
+            auto cabinetIrExtracted = ! cabinetPosition;
+            juce::String cabinetIrError;
             if (! step->isAnchorCapture())
                 setAudioChunk(package, capturedChunkId, "captured", session.capturedSignal(), session.getSampleRate());
 
@@ -1235,12 +1240,44 @@ void CaptureEngine::refresh()
                     for (int channel = 0; channel < dryFull.getNumChannels(); ++channel)
                         dryPrimary.copyFrom(channel, 0, dryFull, channel, 0, dryPrimaryLength);
                     const auto clippedDry = concatenateModelFitSegments(dryPrimary, activeProbeSegments);
-                    setPcm16AudioChunk(package, dryChunkId, "dryReference", clippedDry, session.getSampleRate());
+                    setAudioChunk(package, dryChunkId, "dryReference", clippedDry, session.getSampleRate());
                     appState.appendLog("HANSO Probe warning: capture ended inside model-fit data; dry and return "
                                        "were cropped to the same " + juce::String(modelSlice.getNumSamples())
                                        + " samples. Re-capture this anchor for full accuracy.");
                 }
-                setPcm16AudioChunk(package, alignedChunkId, "alignedCaptured", modelSlice, session.getSampleRate());
+                if (cabinetPosition)
+                {
+                    const auto& dryFull = session.dryReferenceSignal();
+                    const auto dryLength = juce::jmin(primaryLength, dryFull.getNumSamples());
+                    juce::AudioBuffer<float> dryPrimary(dryFull.getNumChannels(), dryLength);
+                    for (int channel = 0; channel < dryFull.getNumChannels(); ++channel)
+                        dryPrimary.copyFrom(channel, 0, dryFull, channel, 0, dryLength);
+
+                    const auto extraction = CabinetIrExtractor().extract(dryPrimary, primarySlice,
+                                                                          session.getSampleRate());
+                    cabinetIrExtracted = extraction.success;
+                    cabinetIrError = extraction.error;
+                    if (extraction.success)
+                    {
+                        setAudioChunk(package, alignedChunkId, "cabinet-ir",
+                                           extraction.impulseResponse, session.getSampleRate());
+                        appState.appendLog("CabinetProbeC1 deconvolution stored "
+                                           + juce::String(1000.0 * extraction.impulseResponse.getNumSamples()
+                                                          / session.getSampleRate(), 1)
+                                           + " ms IR for " + step->title + ".");
+                    }
+                    else
+                    {
+                        package.removeChunk(alignedChunkId);
+                        appState.appendLog("Cabinet IR extraction failed for " + step->title
+                                           + ": " + extraction.error);
+                    }
+                }
+                else
+                {
+                    setAudioChunk(package, alignedChunkId, "alignedCaptured",
+                                       modelSlice, session.getSampleRate());
+                }
 
                 const auto stepPrefix = alignedChunkId.upToLastOccurrenceOf("/aligned-captured", false, false);
                 const auto fidelityReferenceId = session.getTestSignalSpec().probeVariant == HansoProbeVariant::Full
@@ -1252,7 +1289,7 @@ void CaptureEngine::refresh()
                     if (segment.purpose != HansoProbeSegmentPurpose::Validation)
                         continue;
 
-                    const auto probeChunkId = stepPrefix + "/probe-" + segment.id + ".pcm16";
+                    const auto probeChunkId = stepPrefix + "/probe-" + segment.id + ".f32";
                     if (segment.startSample + segment.numSamples > primarySlice.getNumSamples())
                     {
                         package.removeChunk(probeChunkId);
@@ -1260,15 +1297,15 @@ void CaptureEngine::refresh()
                     }
 
                     const auto validationSlice = copyProbeSegment(primarySlice, segment);
-                    setPcm16AudioChunk(package,
+                    setAudioChunk(package,
                                        probeChunkId,
                                        "probeValidationReal",
                                        validationSlice,
                                        session.getSampleRate());
                     if (segment.id == fidelityReferenceId)
                     {
-                        setPcm16AudioChunk(package,
-                                           stepPrefix + "/sample-hanso-probe-reference.pcm16",
+                        setAudioChunk(package,
+                                           stepPrefix + "/sample-hanso-probe-reference.f32",
                                            "ampProcessedSample",
                                            validationSlice,
                                            session.getSampleRate());
@@ -1277,6 +1314,7 @@ void CaptureEngine::refresh()
                 }
                 if (! activeProbeSegments.empty() && ! fidelityReferenceStored)
                 {
+                    package.removeChunk(stepPrefix + "/sample-hanso-probe-reference.f32");
                     package.removeChunk(stepPrefix + "/sample-hanso-probe-reference.pcm16");
                     appState.appendLog("HANSO Probe warning: held-out end reference was incomplete; "
                                        "probe fidelity refinement will be skipped for this anchor.");
@@ -1290,8 +1328,8 @@ void CaptureEngine::refresh()
                         for (int channel = 0; channel < alignedFull.getNumChannels(); ++channel)
                             sampleSlice.copyFrom(channel, 0, alignedFull, channel, segment.startSample, segment.numSamples);
 
-                        setPcm16AudioChunk(package,
-                                           stepPrefix + "/sample-" + segment.id + ".pcm16",
+                        setAudioChunk(package,
+                                           stepPrefix + "/sample-" + segment.id + ".f32",
                                            "ampProcessedSample",
                                            sampleSlice,
                                            session.getSampleRate());
@@ -1307,7 +1345,16 @@ void CaptureEngine::refresh()
             }
             else
             {
-                setPcm16AudioChunk(package, alignedChunkId, "alignedCaptured", alignedFull, session.getSampleRate());
+                if (cabinetPosition)
+                {
+                    cabinetIrError = "Cabinet return did not contain a complete primary probe.";
+                    package.removeChunk(alignedChunkId);
+                }
+                else
+                {
+                    setAudioChunk(package, alignedChunkId, "alignedCaptured", alignedFull,
+                                       session.getSampleRate());
+                }
             }
 
             const auto rightMuted = wizard.mode != CaptureMode::Easy
@@ -1319,6 +1366,16 @@ void CaptureEngine::refresh()
                                                    alignResult.confidence,
                                                    rightMuted,
                                                    qualityTargetForStep(*step));
+            if (cabinetPosition && ! cabinetIrExtracted)
+            {
+                quality.overallSeverity = CaptureQualitySeverity::Error;
+                quality.issues.push_back({ CaptureQualitySeverity::Error,
+                                           "cabinet-ir-extraction-failed",
+                                           cabinetIrError,
+                                           utf8("캐비넷 응답에서 안정적인 IR을 추출하지 못했습니다."),
+                                           "Check routing and levels, then capture this mic position again.",
+                                           utf8("연결과 리턴 레벨을 확인한 뒤 이 마이크 위치를 다시 캡쳐하세요.") });
+            }
 
             CaptureStepResult result;
             result.stepId = step->stepId;
@@ -1369,7 +1426,9 @@ void CaptureEngine::refresh()
                 }
                 else
                 {
-                    wizard.markCabinetSlotError(step->stepId, "Capture quality check failed.");
+                    wizard.markCabinetSlotError(step->stepId,
+                                                cabinetIrError.isNotEmpty() ? cabinetIrError
+                                                                            : "Capture quality check failed.");
                 }
             }
 
@@ -1420,14 +1479,15 @@ void CaptureEngine::alignCompletedCapture()
 
     auto& package = appState.currentPackage();
     package.removeChunk("capture/aligned-captured.f32");
+    package.removeChunk("capture/aligned-captured.pcm16");
 
     const auto& wizard = appState.captureWizard();
     const auto hasGuidedAnchorCaptures = wizard.findResult("gain-010") != nullptr
                                       || wizard.findResult("gain-050") != nullptr
                                       || wizard.findResult("gain-100") != nullptr;
     if (! hasGuidedAnchorCaptures)
-        setPcm16AudioChunk(package,
-                           "capture/aligned-captured.pcm16",
+        setAudioChunk(package,
+                           "capture/aligned-captured.f32",
                            "alignedCaptured",
                            session.alignedCapturedSignal(),
                            session.getSampleRate());

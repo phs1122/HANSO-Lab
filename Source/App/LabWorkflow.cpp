@@ -8,7 +8,7 @@ namespace hanso
 {
 namespace
 {
-// anchor.sourceChunkId looks like "capture/gain-100/aligned-captured.pcm16";
+// anchor.sourceChunkId looks like "capture/gain-100/aligned-captured.f32";
 // the per-anchor sample recordings live under the same prefix.
 juce::String anchorChunkPrefix(const CompactHansoModelAnchor& anchor)
 {
@@ -16,17 +16,15 @@ juce::String anchorChunkPrefix(const CompactHansoModelAnchor& anchor)
     return marker > 0 ? anchor.sourceChunkId.substring(0, marker) : juce::String();
 }
 
-bool decodePcm16(const HansoPackage& package,
-                 const juce::String& chunkId,
-                 juce::AudioBuffer<float>& buffer,
-                 double& sampleRate)
+bool decodeAudioChunk(const HansoPackage& package,
+                      const juce::String& chunkId,
+                      juce::AudioBuffer<float>& buffer,
+                      double& sampleRate)
 {
-    const auto* chunk = package.findChunk(chunkId);
-    if (chunk == nullptr || chunk->mediaType != "audio/x-hanso-pcm16")
-        return false;
-
+    // Resolves the current (.f32) id and legacy (.pcm16) assets, decoding by
+    // the chunk's declared mediaType.
     juce::String error;
-    return HansoAudioChunkCodec::decodePcm16Audio(chunk->data, buffer, sampleRate, error);
+    return HansoAudioChunkCodec::loadAudioChunk(package, chunkId, buffer, sampleRate, error);
 }
 }
 
@@ -68,10 +66,12 @@ void LabWorkflow::runFidelityEvaluation(ModelExtractionResult& extraction)
     juce::StringArray sampleIds;
     for (const auto* chunk : package.chunks)
     {
-        if (chunk->id.startsWith("capture/shared/sample-") && chunk->id.endsWith(".pcm16"))
-            sampleIds.add(chunk->id.fromFirstOccurrenceOf("capture/shared/sample-", false, false)
-                              .upToLastOccurrenceOf(".pcm16", false, false));
-        else if (chunk->id.endsWith("/sample-hanso-probe-reference.pcm16"))
+        if (chunk->id.startsWith("capture/shared/sample-")
+            && (chunk->id.endsWith(".f32") || chunk->id.endsWith(".pcm16")))
+            sampleIds.addIfNotAlreadyThere(chunk->id.fromFirstOccurrenceOf("capture/shared/sample-", false, false)
+                              .upToLastOccurrenceOf(".", false, false));
+        else if (chunk->id.endsWith("/sample-hanso-probe-reference.f32")
+                 || chunk->id.endsWith("/sample-hanso-probe-reference.pcm16"))
             sampleIds.addIfNotAlreadyThere("hanso-probe-reference");
     }
 
@@ -103,10 +103,10 @@ void LabWorkflow::runFidelityEvaluation(ModelExtractionResult& extraction)
             double drySampleRate = 0.0;
             double realSampleRate = 0.0;
             const auto dryChunkId = sampleId == "hanso-probe-reference"
-                                  ? prefix + "/probe-reference-dry.pcm16"
-                                  : "capture/shared/sample-" + sampleId + ".pcm16";
-            if (! decodePcm16(package, dryChunkId, *dry, drySampleRate)
-                || ! decodePcm16(package, prefix + "/sample-" + sampleId + ".pcm16", *real, realSampleRate))
+                                  ? prefix + "/probe-reference-dry.f32"
+                                  : "capture/shared/sample-" + sampleId + ".f32";
+            if (! decodeAudioChunk(package, dryChunkId, *dry, drySampleRate)
+                || ! decodeAudioChunk(package, prefix + "/sample-" + sampleId + ".f32", *real, realSampleRate))
                 continue;
 
             sampleRate = drySampleRate > 0.0 ? drySampleRate : sampleRate;
@@ -164,8 +164,8 @@ void LabWorkflow::runFidelityEvaluation(ModelExtractionResult& extraction)
         juce::AudioBuffer<float> repeatEnd;
         double repeatStartRate = 0.0;
         double repeatEndRate = 0.0;
-        if (decodePcm16(package, prefix + "/probe-reference-a-start.pcm16", repeatStart, repeatStartRate)
-            && decodePcm16(package, prefix + "/probe-reference-a-end.pcm16", repeatEnd, repeatEndRate))
+        if (decodeAudioChunk(package, prefix + "/probe-reference-a-start.f32", repeatStart, repeatStartRate)
+            && decodeAudioChunk(package, prefix + "/probe-reference-a-end.f32", repeatEnd, repeatEndRate))
         {
             anchorReport->setProperty("repeatabilityEsrDb",
                                       ModelFidelityEvaluator::esrDb(repeatStart, repeatEnd));

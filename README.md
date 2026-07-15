@@ -9,6 +9,23 @@ HANSO 생태계에서의 위치:
 - **HANSO Engine** — 실시간 하이브리드 기타 DSP 런타임.
 - **HANSO Lab (이 앱)** — 캡쳐 / 분석 / 모델 authoring / `.hanso` export 도구. 실시간 FX 플러그인이 아니다.
 - **`.hanso`** — Amp, Cabinet, Pedal, FullRig 등 여러 asset type을 담는 universal 패키지 포맷.
+
+### 저장 티어 (RAW/JPG 모델 — 정본: `hanso-dsp/docs/HANSO_CONTAINER_FORMAT.md §6.2`)
+
+**UX 원칙: 사용자는 `.hansocap`을 보지 않는다. 사용자 손에 쥐어지는 파일은 `.hanso` 하나로
+충분하다.** (`Source/Serialization/DistributionExport.*` 구현)
+
+- **마스터 `.hansocap`** (`tier: "master"`) — 캡쳐 오디오(dry/aligned/probe/sample, float32)
+  전부를 담는 원본. `Let's HANSO!` export 시 **앱 관리 폴더
+  (`~/Library/Application Support/HANSO Lab/Masters/<captureId>.hansocap`)에 조용히 자동
+  보관**된다 — 저장 다이얼로그도, 유저 노출도 없다. 재피팅·재검증·de-embedding의 원천.
+  로컬 전용 — 공유·배포 금지 (유저 연주가 담길 수 있어 프라이버시 규칙이기도 함).
+- **배포 `.hanso`** (`tier: "distribution"`) — 유저가 export로 받는 유일한 파일. 분석 청크
+  제거 + 캐비닛 IR pcm24 재인코딩된 런타임 슬림본. 단독으로 완결(재생·오디션·공유 전부 가능).
+  마스터는 오직 "나중에 더 좋은 모델로 재피팅"에만 필요하며, `captureId`로 배포본과 아카이브
+  마스터가 연결된다.
+- 재생 경로(`DeviceLibrary::resolve`, HANSOTONE)는 마스터를 거부한다. 배포본을 열어
+  재export해도 아카이브 마스터를 덮어쓰지 않는다.
 - **소비자(consumers)** — FX 플러그인, Unity 기반 리듬게임(가제 '기타리스트 키우기') 등. 캐비넷은 IR convolution 없이 slot별 compact tone profile(EQ 파라미터)만으로도 렌더링할 수 있도록 설계되어 있다.
 
 ---
@@ -65,7 +82,7 @@ Amp 캡쳐 기준 기본 연결:
 
 ### 캡쳐 타입
 
-`Amp` 또는 `Cabinet`을 선택하면 해당 워크플로우 레시피가 로드된다. (Effector/Pedal은 미구현.)
+`Amp`, `Cabinet`, `Pedal / Static Effect`를 선택하면 대상별 워크플로우 레시피가 로드된다. Pedal 캡쳐는 Distortion / Overdrive / Fuzz / Boost / 고정 EQ처럼 정적 비선형 장비만 지원하며 Delay / Reverb / Modulation은 지원하지 않는다.
 
 ---
 
@@ -77,10 +94,19 @@ Setup Confirmed → Calibration → Gain 100% → Gain 50% → Gain 10% → Fini
 
 1. **Setup** — 앰프의 Bass / Mid / Treble / Presence를 12시 방향에 고정한다. 워크플로우 중에는 Gain 노브만 바꾼다.
 2. **Calibration** — Gain을 100%에 두고 Calibration Start. 최대 게인(최대 스트레스)에서 레벨·노이즈를 먼저 검증해 이후 앵커에서 클리핑 서프라이즈를 없앤다. 리턴 입력이 −36 ~ −8 dBFS 범위에 3초 이상 머물면 자동 완료된다.
-3. **Gain anchor 캡쳐 (100% / 50% / 10%)** — 각 단계에서 Gain 노브를 지시된 위치로 맞추고 Start Capture. 앱이 로그 사인 스윕(클릭 방지 페이드 처리)을 보내고 리턴을 녹음한다.
+3. **Gain anchor 캡쳐 (100% / 50% / 10%)** — 각 단계에서 Gain 노브를 지시된 위치로 맞추고 Start Capture. 앱이 HANSO Probe A1을 보내고 리턴을 녹음한다.
+
 4. 각 캡쳐 직후 **품질 검사**가 자동 실행된다: 신호 유무, 클리핑, 권장 RMS 범위, 녹음 길이, 레이턴시, **정렬 신뢰도**(리턴이 실제 테스트 신호의 응답인지 — 잘못된 입력 채널 감지), **노이즈 플로어/SNR**(레이턴시 이전 무신호 구간에서 실측). 문제가 있으면 한/영 안내에 따라 해당 단계만 다시 캡쳐하면 된다.
 5. **Finish Capture** — 분석과 compact model 추출을 실행한다. 이 단계에서는 장비로 신호를 보내지 않는다.
 6. **Export** — 메타데이터 입력 후 `Let's HANSO!`로 `.hanso` 파일 저장.
+
+### Pedal / Static Effect 캡쳐
+
+체인은 `앱 출력 → 리앰프 박스(권장) → 페달 Input → 페달 Output → 인터페이스 Instrument/Line Input`이다. Tone/EQ와 Level을 고정하고 Drive 100% / 50% / 10% anchor를 HANSO Probe A1으로 캡쳐한다. Finish 단계에서 compact model을 추출해 Tone Preview의 Pedal 슬롯에 삽입한다.
+
+### Cabinet 직접 캡쳐
+
+각 위치는 그릴 천에서 마이크 캡슐 중심까지 2 cm를 유지한다. Off-Axis는 같은 지점과 거리를 유지한 채 30도로 회전한다. HANSO Cabinet Probe C1(6초 synchronized ESS + 2초 decay tail)을 재생하고, 정규화 역필터링으로 추출한 IR만 Cabinet slot에 저장한다.
 
 ### 분석이 실제로 측정하는 것
 
@@ -180,16 +206,23 @@ cabProfile          — 캐비넷 slot 목록 + slot별 toneProfile
 captureWorkflow     — 단계별 품질 리포트, interpolationPlan
 ```
 
-Guided 캡쳐 오디오 chunk (PCM16, dry는 anchor 간 공유):
+Guided 캡쳐 오디오 chunk (float32 마스터/분석 티어, dry는 anchor 간 공유):
 
 ```
-capture/shared/dry-reference.pcm16
-capture/gain-010/aligned-captured.pcm16
-capture/gain-050/aligned-captured.pcm16
-capture/gain-100/aligned-captured.pcm16
-cabinet/positions/<slot>/ir.pcm16
+capture/shared/dry-reference.f32
+capture/gain-010/aligned-captured.f32
+capture/gain-050/aligned-captured.f32
+capture/gain-100/aligned-captured.f32
+cabinet/positions/<slot>/ir.f32
 model/compact.hanso-model
 ```
+
+오디오 인코딩 티어(정본: `hanso-dsp/docs/HANSO_CONTAINER_FORMAT.md §6.1`):
+현재 모든 캡처 녹음은 모델 피팅/피델리티 평가에 소비되므로 **float32(`.f32`,
+`audio/x-hanso-float32`)** 로 저장한다. **pcm24(`.pcm24`)** 재생 티어는 향후
+런타임 전용 자산을 위한 것으로 현재 producer는 없다. **pcm16(`.pcm16`)** 은
+구자산 읽기 전용 — 신규 producer는 쓰지 않는다. 소비자는 현재 접미사를 먼저
+찾고 형제 접미사로 폴백해 구자산을 로드한다.
 
 메타데이터의 측정치는 실측된 것만 값으로 존재한다. 측정되지 않은 항목(예: transient)은 `*Measured: false` 플래그와 함께 비워진다 — 소비자는 이 플래그를 신뢰해도 된다.
 
@@ -214,12 +247,12 @@ Source/
 
 현재 compact model은 `input gain → tanh(drive) → 3-band tone → output gain` 구조의 프리뷰용 근사 모델이다. drive와 tone은 실측 기반이지만 다음이 남아 있다:
 
-1. **ESS deconvolution (Farina)** — 이미 사용 중인 로그 스윕에서 선형 IR과 배음별 IR을 분리. EQ 추정의 왜곡 배음 바이어스를 제거하고 H2/H3 실측치를 얻는다.
+1. **비선형 ESS 분리 확장** — Cabinet 선형 IR 역필터링은 구현됨. Amp/Pedal에서 선형 IR과 배음별 IR을 분리해 EQ 추정의 왜곡 배음 바이어스를 제거하고 H2/H3 실측치를 얻는 작업이 남아 있다.
 2. **레벨 프로브 신호** — 다단계 진폭 버스트로 compression attack/release 실측 → `transientMeasured: true` 달성.
 3. **Wiener–Hammerstein 구조** — pre-filter → waveshaper → post-filter. circuit-inspired DSP의 최소 단위.
 4. **Neural residual correction** — residual dataset은 dry/aligned chunk에서 학습 시점에 재생성.
-5. **마이크 거리 실측** — 캡쳐 시점에서 마이크 거리를 기록하고, 프리뷰의 근사 모델을 실측 거리와 연결.
-6. Effector(Pedal) 캡쳐 워크플로우.
+5. **가변 마이크 거리 실측** — 현재 직접 캡쳐 기준은 2 cm로 고정. 추후 실제 거리를 metadata로 기록하고 프리뷰 거리 모델과 연결.
+6. **시간 기반 Effect 캡쳐** — Delay / Reverb / Modulation은 정적 Pedal compact model과 분리된 전용 표현이 필요하다.
 
 ## 9. 개발 시 주의 (Protected areas)
 

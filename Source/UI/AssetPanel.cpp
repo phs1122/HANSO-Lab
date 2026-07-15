@@ -2,6 +2,7 @@
 
 #include "App/Utf8.h"
 #include "Model/HansoCategory.h"
+#include "Serialization/DistributionExport.h"
 #include "Serialization/HansoSerializer.h"
 
 namespace hanso
@@ -182,15 +183,19 @@ void AssetPanel::updatePackageSummary()
     auto summary = "Package v" + juce::String(package.formatVersion)
                  + " / chunks " + juce::String(package.chunks.size());
 
+    const auto* gainCaptured = package.findChunk("capture/gain-010/aligned-captured.f32");
+    if (gainCaptured == nullptr)
+        gainCaptured = package.findChunk("capture/gain-010/aligned-captured.pcm16"); // legacy asset
     if (const auto* captured = package.findChunk("capture/captured.f32"))
         summary += " / captured " + juce::String(captured->numChannels)
                 + " ch x " + juce::String(captured->numSamples) + " samples";
-    else if (const auto* gainCaptured = package.findChunk("capture/gain-010/aligned-captured.pcm16"))
+    else if (gainCaptured != nullptr)
         summary += " / gain anchors / aligned " + juce::String(gainCaptured->numChannels)
                 + " ch x " + juce::String(gainCaptured->numSamples) + " samples";
 
     if (package.findChunk("capture/aligned-captured.f32") != nullptr
-        || package.findChunk("capture/gain-010/aligned-captured.pcm16") != nullptr)
+        || package.findChunk("capture/aligned-captured.pcm16") != nullptr // legacy asset
+        || gainCaptured != nullptr)
         summary += " / aligned";
 
     if (package.findChunk("model/compact-v1.hmodel") != nullptr)
@@ -340,13 +345,18 @@ void AssetPanel::handleExportDestination(juce::File file)
 
 void AssetPanel::writePackageToFile(juce::File file)
 {
+    // The user only ever receives the stripped distribution .hanso; the full
+    // capture master (.hansocap) is archived silently in the app-managed
+    // library so re-fitting stays possible without user-facing master files.
     juce::String error;
-    if (HansoSerializer::writeToFile(appState.currentPackage(), file, error))
+    if (DistributionExport::exportDistribution(appState.currentPackage(), file, error))
     {
         appState.setLastExportDirectory(file.getParentDirectory());
         appState.markCaptureDataSaved();
         exportPathLabel.setText("Export path: " + file.getFullPathName(), juce::dontSendNotification);
         appState.appendLog("Exported package: " + file.getFullPathName());
+        appState.appendLog("Capture master archived: "
+                           + DistributionExport::masterFileForCaptureId(appState.currentPackage().captureId).getFullPathName());
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
                                                "Let's HANSO!",
                                                utf8("저장되었습니다.\n") + file.getFullPathName());

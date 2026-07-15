@@ -27,7 +27,7 @@ bool PreviewCabinetIrProcessor::loadPositionIr(const HansoPackage& package,
         return false;
     }
 
-    const auto* chunk = package.findChunk(chunkId);
+    const auto* chunk = HansoAudioChunkCodec::findAudioChunk(package, chunkId);
     if (chunk == nullptr)
     {
         error = "Chunk not found: " + chunkId;
@@ -35,21 +35,8 @@ bool PreviewCabinetIrProcessor::loadPositionIr(const HansoPackage& package,
     }
 
     double sampleRate = 0.0;
-    if (chunk->mediaType == "audio/x-hanso-pcm16")
-    {
-        if (! HansoAudioChunkCodec::decodePcm16Audio(chunk->data, destination.impulseResponse, sampleRate, error))
-            return false;
-    }
-    else if (chunk->mediaType == "audio/x-hanso-float32")
-    {
-        if (! HansoAudioChunkCodec::decodeFloat32Audio(chunk->data, destination.impulseResponse, sampleRate, error))
-            return false;
-    }
-    else
-    {
-        error = "Unsupported IR media type: " + chunk->mediaType;
+    if (! HansoAudioChunkCodec::decodeAudio(chunk->mediaType, chunk->data, destination.impulseResponse, sampleRate, error))
         return false;
-    }
 
     juce::ignoreUnused(sampleRate);
     return destination.impulseResponse.getNumSamples() > 0;

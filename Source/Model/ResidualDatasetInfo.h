@@ -7,8 +7,8 @@ namespace hanso
 struct ResidualDatasetInfo
 {
     bool prepared { false };
-    juce::String inputChunkId { "capture/shared/dry-reference.pcm16" };
-    juce::String targetChunkId { "capture/gain-010/aligned-captured.pcm16" };
+    juce::String inputChunkId { "capture/shared/dry-reference.f32" };
+    juce::String targetChunkId { "capture/gain-010/aligned-captured.f32" };
     double sampleRate { 48000.0 };
     float normalizationGain { 1.0f };
     int segmentLength { 2048 };

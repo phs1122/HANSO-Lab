@@ -27,6 +27,13 @@ class HansoPackage final
 {
 public:
     int formatVersion { 2 };
+    // Asset tier (container doc §6.2): "master" (.hansocap, full capture audio,
+    // app-managed and invisible to users) or "distribution" (.hanso, stripped
+    // runtime build — the only file users see). Empty = legacy/unspecified.
+    juce::String assetTier;
+    // Stable capture id linking a distribution .hanso back to its archived
+    // master, so re-fitting works without users managing master files.
+    juce::String captureId;
     CaptureMetadata metadata;
     CaptureSettings captureSettings;
     AnalysisSummary analysisSummary;

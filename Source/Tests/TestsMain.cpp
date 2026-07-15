@@ -18,11 +18,13 @@
 #include "Analysis/ModelExtractionEngine.h"
 #include "Analysis/SpectrumUtils.h"
 #include "Capture/CabinetMicPositions.h"
+#include "Capture/CabinetIrExtractor.h"
 #include "Capture/CaptureWizardState.h"
 #include "Capture/SignalAlignment.h"
 #include "Capture/TestSignalGenerator.h"
 #include "Model/HansoPackage.h"
 #include "Preview/PreviewChainPolicy.h"
+#include "Serialization/DistributionExport.h"
 #include "Serialization/HansoAudioChunkCodec.h"
 #include "Serialization/HansoSerializer.h"
 
@@ -75,6 +77,16 @@ juce::AudioBuffer<float> makeHansoProbe(hanso::HansoProbeVariant variant, float 
     spec.probeVariant = variant;
     spec.sampleRate = sampleRate;
     spec.durationSeconds = hanso::TestSignalGenerator::hansoProbeDurationSeconds(variant);
+    spec.amplitude = amplitude;
+    return hanso::TestSignalGenerator().generate(spec);
+}
+
+juce::AudioBuffer<float> makeCabinetProbe(float amplitude)
+{
+    hanso::TestSignalSpec spec;
+    spec.type = hanso::TestSignalType::CabinetProbeC1;
+    spec.sampleRate = sampleRate;
+    spec.durationSeconds = hanso::TestSignalGenerator::cabinetProbeDurationSeconds();
     spec.amplitude = amplitude;
     return hanso::TestSignalGenerator().generate(spec);
 }
@@ -245,6 +257,67 @@ void testHansoProbeA1()
               && spectrum.bandPowerDb(250.0, 2500.0) > -70.0f
               && spectrum.bandPowerDb(2500.0, 10000.0) > -70.0f,
           "HANSO Probe A1 covers low, mid, and high analysis bands");
+}
+
+void testCabinetProbeAndIrExtraction()
+{
+    const auto dry = makeCabinetProbe(0.25f);
+    check(dry.getNumSamples() == static_cast<int>(8.0 * sampleRate),
+          "CabinetProbeC1 duration is 8 seconds");
+    check(dry.getMagnitude(0, static_cast<int>(6.0 * sampleRate),
+                           static_cast<int>(2.0 * sampleRate)) == 0.0f,
+          "CabinetProbeC1 reserves a 2-second silent tail");
+
+    juce::AudioBuffer<float> captured(1, dry.getNumSamples());
+    captured.clear();
+    for (int sample = 0; sample < dry.getNumSamples(); ++sample)
+    {
+        auto value = 0.72f * dry.getSample(0, sample);
+        if (sample >= 48)
+            value += 0.24f * dry.getSample(0, sample - 48);
+        if (sample >= 137)
+            value -= 0.11f * dry.getSample(0, sample - 137);
+        captured.setSample(0, sample, value);
+    }
+
+    const auto extraction = hanso::CabinetIrExtractor().extract(dry, captured, sampleRate);
+    check(extraction.success, "CabinetProbeC1 deconvolution produces an IR", extraction.error);
+    if (extraction.success)
+    {
+        const auto lengthMs = 1000.0 * extraction.impulseResponse.getNumSamples() / sampleRate;
+        const auto peak = extraction.impulseResponse.getMagnitude(0, 0,
+                                                                   extraction.impulseResponse.getNumSamples());
+        check(lengthMs >= 50.0 && lengthMs <= 1000.0,
+              "extracted cabinet IR is trimmed to the supported window",
+              juce::String(lengthMs, 1) + " ms");
+        check(std::abs(peak - juce::Decibels::decibelsToGain(-1.0f)) < 1.0e-4f,
+              "extracted cabinet IR is normalized to -1 dBFS");
+        check(extraction.directPeakSample <= static_cast<int>(0.001 * sampleRate),
+              "extracted cabinet IR keeps the direct response at onset");
+    }
+}
+
+void testPedalAndCabinetRecipes()
+{
+    hanso::CaptureWizardState pedal(hanso::CaptureType::Pedal);
+    const auto* pedalFull = pedal.findStep("gain-100");
+    check(pedal.recipe.category == hanso::HansoCategory::Pedal
+              && pedal.recipe.recipeId == "pedal-static-nonlinear-basic"
+              && pedalFull != nullptr
+              && pedalFull->title == "Drive 100% Capture"
+              && pedalFull->anchor.probeVariant == hanso::CaptureProbeVariant::HansoProbeA1Full,
+          "Pedal capture uses the static nonlinear Drive recipe");
+
+    hanso::CaptureWizardState cabinet(hanso::CaptureType::Cabinet);
+    const auto* cone = cabinet.findStep("cab-center");
+    const auto* offAxis = cabinet.findStep("cab-off-axis");
+    check(cone != nullptr && offAxis != nullptr
+              && cone->anchor.probeVariant == hanso::CaptureProbeVariant::CabinetProbeC1
+              && offAxis->anchor.probeVariant == hanso::CaptureProbeVariant::CabinetProbeC1,
+          "Cabinet positions explicitly select CabinetProbeC1");
+    check(cone != nullptr && cone->instructionText.contains("2 cm")
+              && offAxis != nullptr && offAxis->instructionText.contains("30"),
+          "Cabinet position instructions specify distance and off-axis angle");
 }
 
 void testAlignmentOffset()
@@ -1225,12 +1298,130 @@ void testHighGainFirstUnlockChain()
               && std::abs(static_cast<double>(serializedFullAnchor->getProperty("testSignalDurationSeconds")) - 24.5) < 1.0e-9,
           "capture workflow records per-anchor probe variant and duration");
 }
+
+void testDistributionExportStripsAndReencodes()
+{
+    hanso::HansoPackage package;
+    package.captureId = "test-capture-0001";
+    package.metadata.name = "Dist Test Cab";
+    package.metadata.category = hanso::HansoCategory::Cabinet;
+
+    juce::AudioBuffer<float> audio(1, 512);
+    for (int i = 0; i < audio.getNumSamples(); ++i)
+        audio.setSample(0, i, 0.4f * std::sin(0.05f * static_cast<float>(i)));
+
+    const auto setChunk = [&package, &audio](const char* id, const char* role) {
+        package.setChunk(id, role, "audio/x-hanso-float32",
+                         hanso::HansoAudioChunkCodec::encodeFloat32Audio(audio, sampleRate),
+                         sampleRate, 1, audio.getNumSamples());
+    };
+    setChunk("capture/gain-050/dry-reference.f32", "dryReference");
+    setChunk("capture/gain-050/aligned-captured.f32", "alignedCaptured");
+    setChunk("capture/gain-050/probe-reference-a.f32", "probeValidationReal");
+    setChunk("cabinet/positions/cab-center/ir.f32", "cabinet-ir");
+
+    hanso::DistributionExport::makeDistribution(package);
+
+    check(package.assetTier == "distribution", "distribution copy is tier-stamped");
+    check(package.chunks.size() == 1, "analysis chunks stripped from distribution",
+          juce::String(package.chunks.size()));
+
+    const auto* ir = package.findChunk("cabinet/positions/cab-center/ir.pcm24");
+    check(ir != nullptr && ir->mediaType == "audio/x-hanso-pcm24",
+          "cabinet IR re-encoded to pcm24 with matching id suffix");
+    if (ir != nullptr)
+    {
+        juce::AudioBuffer<float> decoded;
+        double sr = 0.0;
+        juce::String error;
+        check(hanso::HansoAudioChunkCodec::decodeAudio(ir->mediaType, ir->data, decoded, sr, error)
+                  && decoded.getNumSamples() == audio.getNumSamples(),
+              "re-encoded IR decodes with original length", error);
+    }
+
+    // tier/captureId survive the container round-trip.
+    const auto file = juce::File::getCurrentWorkingDirectory().getChildFile("dist-export-test.hanso");
+    juce::String error;
+    check(hanso::HansoSerializer::writeToFile(package, file, error), "distribution file writes", error);
+    hanso::HansoPackage reloaded;
+    check(hanso::HansoSerializer::readFromFile(file, reloaded, error), "distribution file reads", error);
+    check(reloaded.assetTier == "distribution" && reloaded.captureId == "test-capture-0001",
+          "tier and captureId round-trip through container metadata");
+    file.deleteFile();
+}
+
+void testAudioChunkEncodingTiers()
+{
+    // A signal spanning full scale plus a quiet detail so quantisation error is
+    // exercised across the range.
+    juce::AudioBuffer<float> signal(1, 4096);
+    for (int i = 0; i < signal.getNumSamples(); ++i)
+    {
+        const auto t = static_cast<float>(i) / signal.getNumSamples();
+        signal.setSample(0, i, 0.95f * std::sin(juce::MathConstants<float>::twoPi * 12.0f * t)
+                                 + 0.0009f * std::sin(juce::MathConstants<float>::twoPi * 300.0f * t));
+    }
+
+    const auto maxError = [&signal](const juce::AudioBuffer<float>& decoded)
+    {
+        float e = 0.0f;
+        for (int i = 0; i < signal.getNumSamples(); ++i)
+            e = juce::jmax(e, std::abs(signal.getSample(0, i) - decoded.getSample(0, i)));
+        return e;
+    };
+
+    // float32: bit-exact roundtrip.
+    {
+        const auto encoded = hanso::HansoAudioChunkCodec::encodeFloat32Audio(signal, sampleRate);
+        juce::AudioBuffer<float> decoded;
+        double sr = 0.0;
+        juce::String error;
+        const auto ok = hanso::HansoAudioChunkCodec::decodeFloat32Audio(encoded, decoded, sr, error);
+        check(ok && maxError(decoded) == 0.0f && std::abs(sr - sampleRate) < 1.0e-9,
+              "float32 chunk roundtrip is bit-exact", "maxErr=" + juce::String(maxError(decoded), 8));
+    }
+
+    // pcm24: error must sit below the 24-bit quantisation step (and far below
+    // the 16-bit step), confirming it is a genuine 24-bit path.
+    {
+        const auto encoded = hanso::HansoAudioChunkCodec::encodePcm24Audio(signal, sampleRate);
+        juce::AudioBuffer<float> decoded;
+        double sr = 0.0;
+        juce::String error;
+        const auto ok = hanso::HansoAudioChunkCodec::decodePcm24Audio(encoded, decoded, sr, error);
+        const auto err = maxError(decoded);
+        check(ok && err < 1.0f / 8388607.0f + 1.0e-9f && err < 1.0f / 32768.0f,
+              "pcm24 chunk roundtrip stays within 24-bit step", "maxErr=" + juce::String(err, 9));
+    }
+
+    // decodeAudio dispatches on mediaType, and findAudioChunk falls back across
+    // encoding suffixes so a legacy .pcm16 asset resolves under a .f32 lookup.
+    {
+        hanso::HansoPackage package;
+        package.setChunk("capture/gain-050/aligned-captured.pcm16", "test",
+                         hanso::mediaType::pcm16Audio,
+                         hanso::HansoAudioChunkCodec::encodePcm16Audio(signal, sampleRate),
+                         sampleRate, signal.getNumChannels(), signal.getNumSamples());
+
+        juce::AudioBuffer<float> decoded;
+        double sr = 0.0;
+        juce::String error;
+        const auto ok = hanso::HansoAudioChunkCodec::loadAudioChunk(
+            package, "capture/gain-050/aligned-captured.f32", decoded, sr, error);
+        check(ok && decoded.getNumSamples() == signal.getNumSamples(),
+              "loadAudioChunk resolves legacy .pcm16 under a .f32 lookup", error);
+    }
+}
 }
 
 int main()
 {
     testFullSpectrumCoverage();
+    testAudioChunkEncodingTiers();
+    testDistributionExportStripsAndReencodes();
     testHansoProbeA1();
+    testCabinetProbeAndIrExtraction();
+    testPedalAndCabinetRecipes();
     testAlignmentOffset();
     testDriveExtraction();
     testLinearSystemGivesLowDrive();

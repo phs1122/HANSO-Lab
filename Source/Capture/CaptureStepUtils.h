@@ -15,16 +15,16 @@ inline bool isCabinetPositionStep(const CaptureStep& step) noexcept
 inline juce::String dryChunkIdForStep(const CaptureStep& step)
 {
     if (isCabinetPositionStep(step))
-        return "capture/shared/cabinet-dry-reference.pcm16";
+        return "capture/shared/cabinet-dry-reference.f32";
 
-    return step.isAnchorCapture() ? step.anchor.chunkPathPrefix() + "/dry-reference.pcm16"
-                                : "capture/" + step.stepId + "/dry-reference.pcm16";
+    return step.isAnchorCapture() ? step.anchor.chunkPathPrefix() + "/dry-reference.f32"
+                                : "capture/" + step.stepId + "/dry-reference.f32";
 }
 
 inline juce::String legacySharedDryChunkIdForStep(const CaptureStep& step)
 {
-    return isCabinetPositionStep(step) ? "capture/shared/cabinet-dry-reference.pcm16"
-                                      : "capture/shared/dry-reference.pcm16";
+    return isCabinetPositionStep(step) ? "capture/shared/cabinet-dry-reference.f32"
+                                      : "capture/shared/dry-reference.f32";
 }
 
 inline bool dryChunkIsSharedForStep(const CaptureStep& step)
@@ -42,8 +42,8 @@ inline juce::String alignedChunkIdForStep(const CaptureStep& step)
     if (isCabinetPositionStep(step))
         return impulseResponseChunkIdForCabinetPosition(step.stepId);
 
-    return step.isAnchorCapture() ? step.anchor.chunkPathPrefix() + "/aligned-captured.pcm16"
-                                : "capture/" + step.stepId + "/aligned-captured.pcm16";
+    return step.isAnchorCapture() ? step.anchor.chunkPathPrefix() + "/aligned-captured.f32"
+                                : "capture/" + step.stepId + "/aligned-captured.f32";
 }
 
 // Sample-injection chunk ids are keyed by this sanitized form of the preview

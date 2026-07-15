@@ -53,6 +53,7 @@ set(HANSO_LAB_APP_SOURCES
     Source/Audio/PreviewMicDistanceProcessor.cpp
     Source/Audio/PreviewModelProcessor.cpp
     Source/Capture/CaptureEngine.cpp
+    Source/Capture/CabinetIrExtractor.cpp
     Source/Capture/CabinetIrImporter.cpp
     Source/Capture/CaptureRecipe.cpp
     Source/Capture/CaptureSession.cpp
@@ -76,6 +77,7 @@ set(HANSO_LAB_APP_SOURCES
     Source/Audio/PreviewMicColorProcessor.cpp
     Source/Model/HansoPackage.cpp
     Source/Preview/PreviewSampleLibrary.cpp
+    Source/Serialization/DistributionExport.cpp
     Source/Serialization/HansoSerializer.cpp
     Source/Serialization/HansoAudioChunkCodec.cpp
     Source/Serialization/HansoModelCodec.cpp
@@ -143,12 +145,14 @@ target_sources(HANSO_Lab_Tests PRIVATE
     Source/Audio/PreviewMicColorProcessor.cpp
     Source/Audio/PreviewModelProcessor.cpp
     Source/Capture/CaptureRecipe.cpp
+    Source/Capture/CabinetIrExtractor.cpp
     Source/Capture/CaptureWizardState.cpp
     Source/Capture/SignalAlignment.cpp
     Source/Capture/TestSignalGenerator.cpp
     Source/Model/HansoPackage.cpp
     Source/Serialization/HansoAudioChunkCodec.cpp
     Source/Serialization/HansoModelCodec.cpp
+    Source/Serialization/DistributionExport.cpp
     Source/Serialization/HansoSerializer.cpp)
 
 target_include_directories(HANSO_Lab_Tests
@@ -192,6 +196,7 @@ target_sources(HANSO_Lab_CabCli PRIVATE
     Source/Model/HansoPackage.cpp
     Source/Serialization/HansoAudioChunkCodec.cpp
     Source/Serialization/HansoModelCodec.cpp
+    Source/Serialization/DistributionExport.cpp
     Source/Serialization/HansoSerializer.cpp)
 
 target_include_directories(HANSO_Lab_CabCli

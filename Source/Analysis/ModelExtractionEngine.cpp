@@ -21,26 +21,15 @@ float clampDb(float value, float minDb, float maxDb) noexcept
     return juce::jlimit(minDb, maxDb, std::isfinite(value) ? value : 0.0f);
 }
 
-bool decodePcm16Chunk(const HansoPackage& package,
+bool decodeAudioChunk(const HansoPackage& package,
                       const juce::String& chunkId,
                       juce::AudioBuffer<float>& buffer,
                       double& sampleRate,
                       juce::String& error)
 {
-    const auto* chunk = package.findChunk(chunkId);
-    if (chunk == nullptr)
-    {
-        error = "Missing chunk: " + chunkId;
-        return false;
-    }
-
-    if (chunk->mediaType != "audio/x-hanso-pcm16")
-    {
-        error = "Unsupported audio chunk encoding for model extraction: " + chunkId;
-        return false;
-    }
-
-    return HansoAudioChunkCodec::decodePcm16Audio(chunk->data, buffer, sampleRate, error);
+    // Resolves the current (.f32) id and falls back to legacy (.pcm16) assets,
+    // decoding by the chunk's declared mediaType.
+    return HansoAudioChunkCodec::loadAudioChunk(package, chunkId, buffer, sampleRate, error);
 }
 
 struct DriveFitResult
@@ -222,9 +211,9 @@ ModelExtractionResult ModelExtractionEngine::extractIntoPackage(HansoPackage& pa
     ModelExtractionResult result;
 
     static const AnchorSource sources[] {
-        { "capture/gain-010/dry-reference.pcm16", "capture/gain-010/aligned-captured.pcm16", 0.1f },
-        { "capture/gain-050/dry-reference.pcm16", "capture/gain-050/aligned-captured.pcm16", 0.5f },
-        { "capture/gain-100/dry-reference.pcm16", "capture/gain-100/aligned-captured.pcm16", 1.0f }
+        { "capture/gain-010/dry-reference.f32", "capture/gain-010/aligned-captured.f32", 0.1f },
+        { "capture/gain-050/dry-reference.f32", "capture/gain-050/aligned-captured.f32", 0.5f },
+        { "capture/gain-100/dry-reference.f32", "capture/gain-100/aligned-captured.f32", 1.0f }
     };
 
     CompactHansoModel model;
@@ -238,7 +227,7 @@ ModelExtractionResult ModelExtractionEngine::extractIntoPackage(HansoPackage& pa
         juce::AudioBuffer<float> captured;
         double capturedSampleRate = 0.0;
         juce::String decodeError;
-        if (! decodePcm16Chunk(package, source.chunkId, captured, capturedSampleRate, decodeError))
+        if (! decodeAudioChunk(package, source.chunkId, captured, capturedSampleRate, decodeError))
             continue;
 
         if (captured.getNumSamples() <= 0 || rmsDb(captured) <= -90.0f)
@@ -248,10 +237,10 @@ ModelExtractionResult ModelExtractionEngine::extractIntoPackage(HansoPackage& pa
         double drySampleRate = 0.0;
         juce::String dryDecodeError;
         auto usedLegacySharedDry = false;
-        if (! decodePcm16Chunk(package, source.dryChunkId, dry, drySampleRate, dryDecodeError))
+        if (! decodeAudioChunk(package, source.dryChunkId, dry, drySampleRate, dryDecodeError))
         {
             usedLegacySharedDry = true;
-            if (! decodePcm16Chunk(package, "capture/shared/dry-reference.pcm16", dry, drySampleRate, dryDecodeError))
+            if (! decodeAudioChunk(package, "capture/shared/dry-reference.f32", dry, drySampleRate, dryDecodeError))
             {
                 warnings.add("Skipped gain "
                              + juce::String(source.parameterValue * 100.0f, 0)

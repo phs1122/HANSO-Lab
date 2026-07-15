@@ -114,6 +114,8 @@ bool HansoSerializer::readFromFile(const juce::File& source, HansoPackage& packa
 
     if (auto* object = metadata.getDynamicObject())
     {
+        package.assetTier = object->getProperty("tier").toString();
+        package.captureId = object->getProperty("captureId").toString();
         package.metadata.name = object->getProperty("name").toString();
         package.metadata.author = object->getProperty("author").toString();
         package.metadata.manufacturer = object->getProperty("manufacturer").toString();

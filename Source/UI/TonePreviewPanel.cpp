@@ -949,8 +949,8 @@ juce::String TonePreviewPanel::realCaptureChunkIdForSelection() const
     else if (std::abs(gainPercent - 100.0) <= std::abs(gainPercent - 50.0))
         anchorDirectory = "gain-100";
 
-    const auto chunkId = "capture/" + anchorDirectory + "/sample-" + sampleId + ".pcm16";
-    return appState.currentPackage().findChunk(chunkId) != nullptr ? chunkId : juce::String();
+    const auto chunkId = "capture/" + anchorDirectory + "/sample-" + sampleId + ".f32";
+    return HansoAudioChunkCodec::findAudioChunk(appState.currentPackage(), chunkId) != nullptr ? chunkId : juce::String();
 }
 
 bool TonePreviewPanel::playRealCaptureRecording()
@@ -959,12 +959,10 @@ bool TonePreviewPanel::playRealCaptureRecording()
     if (chunkId.isEmpty())
         return false;
 
-    const auto* chunk = appState.currentPackage().findChunk(chunkId);
     juce::AudioBuffer<float> recording;
     double recordingSampleRate = 0.0;
     juce::String error;
-    if (chunk == nullptr
-        || ! HansoAudioChunkCodec::decodePcm16Audio(chunk->data, recording, recordingSampleRate, error))
+    if (! HansoAudioChunkCodec::loadAudioChunk(appState.currentPackage(), chunkId, recording, recordingSampleRate, error))
         return false;
 
     if (recordingSampleRate > 0.0 && std::abs(recordingSampleRate - capture.currentSampleRate()) > 0.5)

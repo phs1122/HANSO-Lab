@@ -34,7 +34,8 @@ juce::String firstCabinetIrChunkId(const HansoPackage& package)
 
     for (const auto* chunk : package.chunks)
     {
-        if (chunk->id.startsWith("cabinet/positions/") && chunk->id.endsWith("/ir.pcm16"))
+        if (chunk->id.startsWith("cabinet/positions/")
+            && (chunk->id.endsWith("/ir.f32") || chunk->id.endsWith("/ir.pcm16")))
             return chunk->id;
     }
 
@@ -293,6 +294,10 @@ juce::var HansoPackage::createMetadataVar() const
     object->setProperty("format", "hanso");
     object->setProperty("formatVersion", formatVersion);
     object->setProperty("packageKind", "toneAsset");
+    if (assetTier.isNotEmpty())
+        object->setProperty("tier", assetTier);
+    if (captureId.isNotEmpty())
+        object->setProperty("captureId", captureId);
     object->setProperty("assetType", assetTypeForCategory(metadata.category));
     object->setProperty("name", metadata.name);
     object->setProperty("author", metadata.author);
@@ -316,26 +321,26 @@ juce::var HansoPackage::createMetadataVar() const
     auto captureData = new juce::DynamicObject();
     if (metadata.category == HansoCategory::Cabinet)
     {
-        captureData->setProperty("dryReferenceChunkId", "capture/shared/cabinet-dry-reference.pcm16");
+        captureData->setProperty("dryReferenceChunkId", "capture/shared/cabinet-dry-reference.f32");
         captureData->setProperty("capturedChunkId", juce::var());
         const auto firstIrChunkId = firstCabinetIrChunkId(*this);
         captureData->setProperty("alignedCapturedChunkId",
                                  firstIrChunkId.isNotEmpty() ? juce::var(firstIrChunkId) : juce::var());
-        captureData->setProperty("encoding", "pcm16 little-endian channel-major for cabinet IR captures");
+        captureData->setProperty("encoding", "float32 channel-major for cabinet IR captures");
     }
     else
     {
         captureData->setProperty("dryReferenceMode", "per-anchor");
-        captureData->setProperty("legacySharedDryReferenceChunkId", "capture/shared/dry-reference.pcm16");
-        captureData->setProperty("dryReferenceChunkId", "capture/gain-010/dry-reference.pcm16");
+        captureData->setProperty("legacySharedDryReferenceChunkId", "capture/shared/dry-reference.f32");
+        captureData->setProperty("dryReferenceChunkId", "capture/gain-010/dry-reference.f32");
         captureData->setProperty("capturedChunkId", juce::var());
-        captureData->setProperty("alignedCapturedChunkId", "capture/gain-010/aligned-captured.pcm16");
+        captureData->setProperty("alignedCapturedChunkId", "capture/gain-010/aligned-captured.f32");
         juce::Array<juce::var> anchorDryReferences;
-        anchorDryReferences.add("capture/gain-010/dry-reference.pcm16");
-        anchorDryReferences.add("capture/gain-050/dry-reference.pcm16");
-        anchorDryReferences.add("capture/gain-100/dry-reference.pcm16");
+        anchorDryReferences.add("capture/gain-010/dry-reference.f32");
+        anchorDryReferences.add("capture/gain-050/dry-reference.f32");
+        anchorDryReferences.add("capture/gain-100/dry-reference.f32");
         captureData->setProperty("anchorDryReferenceChunkIds", anchorDryReferences);
-        captureData->setProperty("encoding", "pcm16 little-endian channel-major for guided captures");
+        captureData->setProperty("encoding", "float32 channel-major for guided captures");
     }
     object->setProperty("captureData", captureData);
     if (! captureWorkflow.isVoid())

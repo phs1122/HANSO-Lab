@@ -108,8 +108,8 @@ int main(int argc, char* argv[])
         const auto chunkId = hanso::impulseResponseChunkIdForCabinetPosition(request.slotId);
         package.setChunk(chunkId,
                          "cabinet-ir",
-                         "audio/x-hanso-pcm16",
-                         hanso::HansoAudioChunkCodec::encodePcm16Audio(result.impulseResponse, result.sampleRate),
+                         hanso::mediaType::float32Audio,
+                         hanso::HansoAudioChunkCodec::encodeFloat32Audio(result.impulseResponse, result.sampleRate),
                          result.sampleRate,
                          result.impulseResponse.getNumChannels(),
                          result.impulseResponse.getNumSamples());
