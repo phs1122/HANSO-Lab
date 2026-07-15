@@ -93,7 +93,7 @@ Cabinet 패키지의 `cabProfile`은 다음 additive 필드를 가질 수 있다
 
 ## HANSO Probe A1 capture artifacts (additive)
 
-Amp Gain anchor workflow는 `metadata.captureSettings.testSignalType`에 `HansoProbeA1`을 기록한다. `captureWorkflow.captureRecipe.anchors[]`의 `probeVariant`와 `testSignalType`은 anchor별 `HansoProbeA1Full` 또는 `HansoProbeA1Delta`, `testSignalDurationSeconds`는 각각 24.5 또는 10.0을 기록한다. 파형과 segment 역할의 정본은 `docs/HANSO_PROBE_A1.md`이다.
+Amp Gain 및 정적 Pedal Drive anchor workflow는 `metadata.captureSettings.testSignalType`에 `HansoProbeA1`을 기록한다. `captureWorkflow.captureRecipe.anchors[]`의 `probeVariant`와 `testSignalType`은 anchor별 `HansoProbeA1Full` 또는 `HansoProbeA1Delta`, `testSignalDurationSeconds`는 각각 24.5 또는 10.0을 기록한다. 파형과 segment 역할의 정본은 `docs/HANSO_PROBE_A1.md`이다.
 
 Anchor별 optional probe validation chunks:
 
@@ -104,6 +104,18 @@ Anchor별 optional probe validation chunks:
 - `capture/gain-<anchor>/sample-hanso-probe-reference.pcm16` — fidelity evaluator가 소비하는 held-out 실측 reference, role `ampProcessedSample`
 
 Full의 시작/종료 실측 reference가 모두 있으면 `captureFidelity.anchors[].repeatabilityEsrDb`를 기록할 수 있다. 이 값은 모델 출력 ESR이 아니라 동일한 dry reference에 대한 장비의 시작/종료 repeatability ESR이다. 알 수 없는 소비자는 이 metadata와 chunks를 무시할 수 있으며 기존 compact model chunk의 runtime semantics는 변하지 않는다.
+
+## Cabinet Probe C1 direct IR capture
+
+Cabinet 위치 직접 캡쳐는 `metadata.captureSettings.testSignalType`과 해당 position anchor의
+`probeVariant`/`testSignalType`에 `CabinetProbeC1`, `testSignalDurationSeconds`에 `8.0`을 기록한다.
+신호는 6초 synchronized ESS와 2초 decay tail로 구성되며 정본은
+`docs/CABINET_PROBE_C1.md`이다.
+
+`cabinet/positions/<position-id>/ir.pcm16`은 정렬된 sweep return이 아니라 정규화
+주파수영역 역필터링으로 추출한 실제 impulse response여야 한다. role은 `cabinet-ir`,
+encoding은 PCM16이다. 역필터링에 실패한 slot은 `error` 상태가 되며 real source로
+인정하지 않는다.
 
 ## CaptureFirstHybrid 원칙
 

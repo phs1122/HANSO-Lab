@@ -42,6 +42,41 @@ CaptureRecipe CaptureRecipe::createBasicAmpLiquidGain()
     return recipe;
 }
 
+CaptureRecipe CaptureRecipe::createStaticPedalCapture()
+{
+    CaptureRecipe recipe;
+    recipe.recipeId = "pedal-static-nonlinear-basic";
+    recipe.displayName = "Static Pedal Capture";
+    recipe.category = HansoCategory::Pedal;
+
+    recipe.fixedControls.push_back({ "Tone / EQ", "12 o'clock", 0.5f });
+    recipe.fixedControls.push_back({ "Level", "Unity gain", 0.5f });
+
+    recipe.steps.push_back({ "setup", "Setup Confirmed",
+                             utf8("지원 대상은 Distortion / Overdrive / Fuzz / Boost / 고정 EQ처럼 시간에 따라 변하지 않는 페달입니다.\nModulation / Delay / Reverb와 자동으로 움직이는 파라미터는 현재 캡쳐하지 않습니다.\n앱 출력 → 리앰프 박스(권장) → 페달 Input, 페달 Output → 인터페이스 Instrument/Line Input으로 연결하세요."),
+                             CaptureStepStatus::Ready, {}, true });
+    recipe.steps.push_back({ "calibration", "Calibration Complete",
+                             utf8("Drive를 100%로, Tone/EQ는 12시로 맞추고 Level은 바이패스와 비슷한 크기에서 시작하세요.\nCalibration Start 후 페달 Level 또는 인터페이스 입력 게인을 조절해 리턴이 -36 ~ -8 dBFS에 3초 이상 머물게 하세요."),
+                             CaptureStepStatus::NotStarted, {}, true });
+    recipe.steps.push_back({ "gain-100", "Drive 100% Capture",
+                             utf8("Drive를 100%로 유지하고 캡쳐하세요. Tone/EQ와 Level은 Calibration 때 위치를 바꾸지 마세요."),
+                             CaptureStepStatus::NotStarted,
+                             { "gain", 1.0f, "Drive 100%", CaptureProbeVariant::HansoProbeA1Full }, true });
+    recipe.steps.push_back({ "gain-050", "Drive 50% Capture",
+                             utf8("Drive만 50%로 낮춘 뒤 캡쳐하세요. Tone/EQ와 Level은 그대로 유지합니다."),
+                             CaptureStepStatus::NotStarted,
+                             { "gain", 0.5f, "Drive 50%", CaptureProbeVariant::HansoProbeA1Delta }, true });
+    recipe.steps.push_back({ "gain-010", "Drive 10% Capture",
+                             utf8("Drive만 10%로 낮춘 뒤 캡쳐하세요. Tone/EQ와 Level은 그대로 유지합니다."),
+                             CaptureStepStatus::NotStarted,
+                             { "gain", 0.1f, "Drive 10%", CaptureProbeVariant::HansoProbeA1Delta }, true });
+    recipe.steps.push_back({ "final-validation", "Finish Capture",
+                             utf8("세 Drive anchor를 모두 캡쳐했다면 분석과 정적 비선형 모델 추출을 실행합니다. 이 단계에서는 페달로 신호를 보내지 않습니다."),
+                             CaptureStepStatus::NotStarted, {}, true });
+
+    return recipe;
+}
+
 CaptureRecipe CaptureRecipe::createCabinetMicPositions()
 {
     CaptureRecipe recipe;
@@ -60,7 +95,8 @@ CaptureRecipe CaptureRecipe::createCabinetMicPositions()
         recipe.steps.push_back({ position.id, position.label,
                                  utf8(position.instruction),
                                  CaptureStepStatus::NotStarted,
-                                 { "cabinet-position", position.normalizedPosition, position.label },
+                                 { "cabinet-position", position.normalizedPosition, position.label,
+                                   CaptureProbeVariant::CabinetProbeC1 },
                                  false });
     }
     recipe.steps.push_back({ "final-validation", "Finish / Build Cabinet",

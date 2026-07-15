@@ -6,6 +6,8 @@ namespace
 {
 constexpr double fullProbeDurationSeconds = 24.5;
 constexpr double deltaProbeDurationSeconds = 10.0;
+constexpr double cabinetProbeTotalDurationSeconds = 8.0;
+constexpr double cabinetSweepDurationSeconds = 6.0;
 
 int toSamples(double seconds, double sampleRate) noexcept
 {
@@ -328,6 +330,8 @@ juce::AudioBuffer<float> TestSignalGenerator::generate(const TestSignalSpec& spe
 {
     const auto duration = spec.type == TestSignalType::HansoProbeA1
                         ? hansoProbeDurationSeconds(spec.probeVariant)
+                        : spec.type == TestSignalType::CabinetProbeC1
+                        ? cabinetProbeTotalDurationSeconds
                         : spec.durationSeconds;
     const auto numSamples = toSamples(duration, spec.sampleRate);
     juce::AudioBuffer<float> buffer(1, numSamples);
@@ -341,6 +345,7 @@ juce::AudioBuffer<float> TestSignalGenerator::generate(const TestSignalSpec& spe
         case TestSignalType::ImpulseBurst: generateImpulseBurst(buffer, spec); break;
         case TestSignalType::MultiSine: generateMultiSine(buffer, spec); break;
         case TestSignalType::HansoProbeA1: generateHansoProbeA1(buffer, spec); break;
+        case TestSignalType::CabinetProbeC1: generateCabinetProbeC1(buffer, spec); break;
     }
 
     return buffer;
@@ -356,6 +361,7 @@ juce::String TestSignalGenerator::toString(TestSignalType type)
         case TestSignalType::ImpulseBurst: return "ImpulseBurst";
         case TestSignalType::MultiSine: return "MultiSine";
         case TestSignalType::HansoProbeA1: return "HansoProbeA1";
+        case TestSignalType::CabinetProbeC1: return "CabinetProbeC1";
     }
 
     return "Unknown";
@@ -373,6 +379,11 @@ juce::String TestSignalGenerator::toString(const TestSignalSpec& spec)
 double TestSignalGenerator::hansoProbeDurationSeconds(HansoProbeVariant variant) noexcept
 {
     return variant == HansoProbeVariant::Full ? fullProbeDurationSeconds : deltaProbeDurationSeconds;
+}
+
+double TestSignalGenerator::cabinetProbeDurationSeconds() noexcept
+{
+    return cabinetProbeTotalDurationSeconds;
 }
 
 std::vector<HansoProbeSegment> TestSignalGenerator::hansoProbeSegments(HansoProbeVariant variant,
@@ -552,5 +563,16 @@ void TestSignalGenerator::generateHansoProbeA1(juce::AudioBuffer<float>& buffer,
     const auto peak = buffer.getMagnitude(0, 0, buffer.getNumSamples());
     if (peak > ceiling && peak > 0.0f)
         buffer.applyGain(ceiling / peak);
+}
+
+void TestSignalGenerator::generateCabinetProbeC1(juce::AudioBuffer<float>& buffer,
+                                                  const TestSignalSpec& spec)
+{
+    const auto sweepSamples = juce::jmin(buffer.getNumSamples(),
+                                         toSamples(cabinetSweepDurationSeconds, spec.sampleRate));
+    writeSynchronizedSweep(buffer, 0, sweepSamples, spec.sampleRate,
+                           juce::jlimit(0.0f, 1.0f, spec.amplitude));
+    // The remaining two seconds stay silent so the cabinet and room tail are
+    // captured before regularized deconvolution.
 }
 }

@@ -18,7 +18,8 @@ enum class CaptureProbeVariant
 {
     Default,
     HansoProbeA1Full,
-    HansoProbeA1Delta
+    HansoProbeA1Delta,
+    CabinetProbeC1
 };
 
 inline juce::String toString(CaptureProbeVariant variant)
@@ -28,6 +29,7 @@ inline juce::String toString(CaptureProbeVariant variant)
         case CaptureProbeVariant::Default: return "Default";
         case CaptureProbeVariant::HansoProbeA1Full: return "HansoProbeA1Full";
         case CaptureProbeVariant::HansoProbeA1Delta: return "HansoProbeA1Delta";
+        case CaptureProbeVariant::CabinetProbeC1: return "CabinetProbeC1";
     }
 
     return "Default";

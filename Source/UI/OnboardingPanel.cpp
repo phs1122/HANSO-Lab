@@ -126,7 +126,8 @@ int OnboardingPanel::visibleChoiceCount() const
 void OnboardingPanel::computeVerdict()
 {
     // The last choice in each output-capture set is always "없음" (no path).
-    const int noneIndex = (target == CaptureType::Cabinet || target == CaptureType::PreAmp) ? 1 : 2;
+    const int noneIndex = (target == CaptureType::Cabinet || target == CaptureType::PreAmp
+                           || target == CaptureType::Pedal || target == CaptureType::Effect) ? 1 : 2;
     feasible = (outCapture >= 0 && outCapture != noneIndex);
 }
 
@@ -149,7 +150,7 @@ void OnboardingPanel::render()
         case Step::Welcome:
             kicker.setText("HANSO LAB", juce::dontSendNotification);
             titleLabel.setText(utf8("HANSO Lab에 오신 것을 환영합니다"), juce::dontSendNotification);
-            subtitle.setText(utf8("기타 앰프·캐비닛의 사운드를 캡쳐해 .hanso 모델로 만듭니다.\n시작 전에 장비 몇 가지만 확인할게요."), juce::dontSendNotification);
+            subtitle.setText(utf8("기타 앰프·캐비닛·정적 페달의 사운드를 캡쳐해 .hanso 모델로 만듭니다.\n시작 전에 장비 몇 가지만 확인할게요."), juce::dontSendNotification);
             nextButton.setButtonText(utf8("시작하기"));
             nextEnabled = true;
             break;
@@ -176,11 +177,13 @@ void OnboardingPanel::render()
             subtitle.setText(utf8("대상에 따라 필요한 장비와 캡쳐 방식이 달라집니다."), juce::dontSendNotification);
             choice(0, "Full Rig", utf8("일체형 콤보 앰프, 헤드/캐비넷 분리형 스택 앰프. Line Out이나 마이킹을 통해 캡쳐합니다."), true);
             choice(1, "Amp Head", utf8("헤드 앰프 (스피커 없음). 라인/DI/로드박스로 출력을 받습니다."), true);
-            choice(2, "Pedal / Effect", utf8("드라이브/이펙터. 아직 지원하지 않습니다."), false);
+            choice(2, "Pedal / Static Effect", utf8("Distortion, Overdrive, Fuzz, Boost, 고정 EQ. Delay/Reverb/Modulation은 제외합니다."), true);
             choice(3, "Pre Amp Only", utf8("프리앰프 단만 캡쳐 (FX 센드/프리앰프 아웃, 캐비넷 없음)."), true);
             choice(4, "Cabinet", utf8("스피커 IR을 캡쳐합니다. 마이크 + 신호원이 필요합니다."), true);
             if (targetAnswered)
-                select(target == CaptureType::Amp ? 1 : target == CaptureType::PreAmp ? 3
+                select(target == CaptureType::Amp ? 1
+                       : target == CaptureType::Pedal || target == CaptureType::Effect ? 2
+                       : target == CaptureType::PreAmp ? 3
                        : target == CaptureType::Cabinet ? 4 : 0);   // Full Rig → 0
             nextEnabled = targetAnswered;
             break;
@@ -232,6 +235,13 @@ void OnboardingPanel::render()
                 choice(0, utf8("라인 · DI · FX 센드"), utf8("프리앰프 아웃 또는 이펙트 루프 센드."), true);
                 choice(1, utf8("없음"), utf8("출력 캡쳐 경로가 없습니다."), true);
             }
+            else if (target == CaptureType::Pedal || target == CaptureType::Effect)
+            {
+                titleLabel.setText(utf8("페달 출력을 어떻게 받나요?"), juce::dontSendNotification);
+                subtitle.setText(utf8("페달 Output을 인터페이스 Instrument/Line Input으로 되돌립니다."), juce::dontSendNotification);
+                choice(0, utf8("Instrument · Line Input"), utf8("페달 Output → 인터페이스 입력. 다이렉트 모니터와 루프백은 끕니다."), true);
+                choice(1, utf8("없음"), utf8("페달 리턴을 받을 입력 경로가 없습니다."), true);
+            }
             else
             {
                 titleLabel.setText(utf8("앰프 소리를 어떻게 받나요?"), juce::dontSendNotification);
@@ -254,10 +264,16 @@ void OnboardingPanel::render()
             if (feasible)
             {
                 titleLabel.setText(utf8("이 방식으로 캡쳐할 수 있어요 🎉"), juce::dontSendNotification);
-                juce::String path = hasReamp
-                    ? utf8("Line Out → 리앰프 박스 → 장비 (스테레오, 출력 -12 dBFS 고정)")
-                    : (outType == 0 ? utf8("라인 아웃 직결 (스테레오, 출력 슬라이더)")
-                                    : utf8("헤드폰 직결 · TS 케이블 (Left-only, 출력 슬라이더)"));
+                juce::String path;
+                if (target == CaptureType::Pedal || target == CaptureType::Effect)
+                    path = hasReamp
+                         ? utf8("Line Out → 리앰프 박스 → 페달 → 인터페이스 Instrument/Line Input")
+                         : utf8("Left 출력 → 페달 → 인터페이스 Instrument/Line Input");
+                else
+                    path = hasReamp
+                         ? utf8("Line Out → 리앰프 박스 → 장비 (스테레오, 출력 -12 dBFS 고정)")
+                         : (outType == 0 ? utf8("라인 아웃 직결 (스테레오, 출력 슬라이더)")
+                                         : utf8("헤드폰 직결 · TS 케이블 (Left-only, 출력 슬라이더)"));
                 note.setText(utf8("✅  ") + modeText + "\n" + path, juce::dontSendNotification);
                 note.setColour(juce::Label::textColourId, cGreen);
                 nextButton.setButtonText(utf8("튜토리얼로"));
@@ -269,6 +285,7 @@ void OnboardingPanel::render()
                 const auto need = target == CaptureType::Cabinet ? utf8("스피커를 마이킹할 마이크가 필요합니다.")
                     : target == CaptureType::FullRig ? utf8("Line Out 또는 마이크가 필요합니다.")
                     : target == CaptureType::PreAmp ? utf8("프리앰프 아웃 / FX 센드(라인 레벨) 출력이 필요합니다.")
+                    : target == CaptureType::Pedal || target == CaptureType::Effect ? utf8("페달 Output을 받을 Instrument/Line Input이 필요합니다.")
                     : utf8("앰프 출력을 받을 로드박스 또는 라인/DI 아웃이 필요합니다. (스피커 아웃 직결 금지)");
                 note.setText(utf8("⚠️  ") + need + utf8("\n\n'이전'으로 돌아가 대상이나 답을 바꿀 수 있어요."), juce::dontSendNotification);
                 note.setColour(juce::Label::textColourId, cRed);
@@ -283,14 +300,18 @@ void OnboardingPanel::render()
             subtitle.setVisible(false);
             note.setVisible(true);
             note.setColour(juce::Label::textColourId, cText);
-            note.setText(utf8(
+            {
+                auto tutorialText = utf8(
                 "원리 — 앱이 테스트 신호(스윕 등)를 장비로 보내고 되돌아온 소리를 녹음해, 그 전달 특성을 모델로 만듭니다.\n\n"
                 "오디오 인터페이스 세팅\n"
                 "  • 샘플레이트 48kHz · 버퍼는 안정적인 값\n"
                 "  • 앱 출력 → 장비, 장비 리턴 → 캡쳐 입력 채널로 지정\n"
                 "  • 리턴이 -36 ~ -8 dBFS에 들도록 입력 게인 조절 (클리핑 금지)\n"
-                "  • 인터페이스 믹서의 다이렉트 모니터/루프백은 꺼서 이중 경로 방지"),
-                juce::dontSendNotification);
+                "  • 인터페이스 믹서의 다이렉트 모니터/루프백은 꺼서 이중 경로 방지");
+                if (target == CaptureType::Pedal || target == CaptureType::Effect)
+                    tutorialText += utf8("\n\n페달 캡쳐 범위\n  • Drive/Distortion/Fuzz/Boost/고정 EQ만 지원\n  • Delay/Reverb/Modulation과 자동 파라미터 변화는 지원하지 않음");
+                note.setText(tutorialText, juce::dontSendNotification);
+            }
             nextButton.setButtonText(utf8("캡쳐 시작"));
             nextEnabled = true;
             break;
@@ -306,7 +327,7 @@ void OnboardingPanel::applyChoice(int index)
     switch (step)
     {
         case Step::Interface:      interfaceAnswered = true; hasInterface = (index == 0); break;
-        case Step::Target:         targetAnswered = true;    target = (index == 1 ? CaptureType::Amp : index == 3 ? CaptureType::PreAmp : index == 4 ? CaptureType::Cabinet : CaptureType::FullRig); break;
+        case Step::Target:         targetAnswered = true;    target = (index == 1 ? CaptureType::Amp : index == 2 ? CaptureType::Pedal : index == 3 ? CaptureType::PreAmp : index == 4 ? CaptureType::Cabinet : CaptureType::FullRig); break;
         case Step::Reamp:          reampAnswered = true;     hasReamp = (index == 0); break;
         case Step::OutputType:     outType = index; break;
         case Step::OutputCapture:  outCapture = index; break;

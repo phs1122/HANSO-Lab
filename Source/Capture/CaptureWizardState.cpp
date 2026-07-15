@@ -54,6 +54,8 @@ void CaptureWizardState::setCaptureType(CaptureType type)
     captureType = type;
     recipe = captureType == CaptureType::Cabinet
            ? CaptureRecipe::createCabinetMicPositions()
+           : captureType == CaptureType::Pedal || captureType == CaptureType::Effect
+           ? CaptureRecipe::createStaticPedalCapture()
            : CaptureRecipe::createBasicAmpLiquidGain();
 
     results.clear();

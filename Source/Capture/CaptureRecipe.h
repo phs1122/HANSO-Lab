@@ -23,6 +23,7 @@ struct CaptureRecipe
     std::vector<CaptureStep> steps;
 
     static CaptureRecipe createBasicAmpLiquidGain();
+    static CaptureRecipe createStaticPedalCapture();
     static CaptureRecipe createCabinetMicPositions();
 };
 }

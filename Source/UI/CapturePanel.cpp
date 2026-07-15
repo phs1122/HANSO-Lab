@@ -52,6 +52,11 @@ juce::String workflowDescription(const CaptureWizardState& wizard)
         return utf8("캐비넷 캡쳐\nCone / Cone Edge / Edge / Off-Axis 슬롯 중 원하는 위치를 직접 캡쳐하거나 IR로 가져올 수 있습니다.\n비워둔 위치는 Finish 단계에서 실제 source와 포지션 색채 커브를 기반으로 추정됩니다.");
     }
 
+    if (wizard.captureType == CaptureType::Pedal || wizard.captureType == CaptureType::Effect)
+    {
+        return utf8("정적 페달 캡쳐\n앱 출력 → 리앰프 박스(권장) → 페달 Input → 페달 Output → 인터페이스 Input\nDistortion / Overdrive / Fuzz / Boost / 고정 EQ를 지원합니다. Modulation / Delay / Reverb는 현재 지원하지 않습니다.");
+    }
+
     return modeDescription(wizard.mode);
 }
 
@@ -172,7 +177,6 @@ CapturePanel::CapturePanel(ApplicationState& state, CaptureEngine& captureEngine
     captureTypeBox.addItem(utf8("Pedal / Effect"), 3);
     captureTypeBox.addItem("Pre Amp Only", 7);
     captureTypeBox.addItem("Cabinet", 2);
-    captureTypeBox.setItemEnabled(3, false);   // Pedal / Effect not implemented yet
     captureTypeBox.setSelectedId(captureTypeBoxId(CaptureType::FullRig), juce::dontSendNotification);
     captureTypeBox.onChange = [this] { updateCaptureTypeFromSelector(); };
     addAndMakeVisible(captureTypeBox);
@@ -764,7 +768,7 @@ void CapturePanel::syncWizardUi()
         for (const auto& s : wizard.recipe.steps)
             if (s.status == CaptureStepStatus::Passed)
                 ++passed;
-        title.setText(toKoreanString(wizard.mode) + "   ·   " + typeLabel + "   ·   "
+        title.setText(toKoreanString(wizard.mode) + utf8("   ·   ") + typeLabel + utf8("   ·   ")
                           + juce::String(passed) + "/" + juce::String((int) wizard.recipe.steps.size())
                           + utf8(" 단계"),
                       juce::dontSendNotification);
@@ -812,7 +816,7 @@ void CapturePanel::syncWizardUi()
             {
                 if (const auto* slot = wizard.findCabinetSlot(rowStep.stepId))
                 {
-                    titleText += " · " + toString(slot->source);
+                    titleText += utf8(" · ") + toString(slot->source);
                     if (slot->sourceFileName.isNotEmpty())
                         stepButtons[i]->setTooltip("Imported: " + slot->sourceFileName);
                     else if (slot->estimatedFrom.isNotEmpty())
@@ -830,6 +834,11 @@ void CapturePanel::syncWizardUi()
     const auto* step = wizard.findStep(wizard.currentStepId);
     if (step != nullptr)
     {
+        const auto pedal = wizard.captureType == CaptureType::Pedal || wizard.captureType == CaptureType::Effect;
+        safetyWarningLabel.setText(pedal
+            ? utf8("페달 Output은 인터페이스의 Instrument/Line Input으로 받으세요.\n페달 전원 규격과 극성을 확인하고, 앰프 Speaker Out은 절대 인터페이스에 연결하지 마세요.")
+            : utf8("앰프의 Speaker Out을 오디오 인터페이스 Input에 직접 연결하지 마세요.\n반드시 스피커 캐비넷+마이크 또는 적절한 로드박스를 사용해야 합니다."),
+            juce::dontSendNotification);
         instructionTitleLabel.setText(step->title, juce::dontSendNotification);
         instructionLabel.setText(step->instructionText, juce::dontSendNotification);
         qualityLabel.setText(qualityText(wizard.findResult(step->stepId)), juce::dontSendNotification);

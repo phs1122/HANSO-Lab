@@ -14,7 +14,8 @@ enum class TestSignalType
     PinkNoise,
     ImpulseBurst,
     MultiSine,
-    HansoProbeA1
+    HansoProbeA1,
+    CabinetProbeC1
 };
 
 enum class HansoProbeVariant
@@ -63,6 +64,7 @@ public:
     static juce::String toString(const TestSignalSpec& spec);
     static std::array<double, 10> multiSineFrequencies() noexcept;
     static double hansoProbeDurationSeconds(HansoProbeVariant variant) noexcept;
+    static double cabinetProbeDurationSeconds() noexcept;
     static std::vector<HansoProbeSegment> hansoProbeSegments(HansoProbeVariant variant,
                                                               double sampleRate);
 
@@ -73,5 +75,6 @@ private:
     static void generateImpulseBurst(juce::AudioBuffer<float>& buffer, const TestSignalSpec& spec);
     static void generateMultiSine(juce::AudioBuffer<float>& buffer, const TestSignalSpec& spec);
     static void generateHansoProbeA1(juce::AudioBuffer<float>& buffer, const TestSignalSpec& spec);
+    static void generateCabinetProbeC1(juce::AudioBuffer<float>& buffer, const TestSignalSpec& spec);
 };
 }
