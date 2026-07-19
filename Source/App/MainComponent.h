@@ -52,7 +52,7 @@ private:
     juce::PropertiesFile settings { settingsOptions() };
 
     void finishOnboarding(bool completed);
-    void applyOnboardingResult(CaptureType type, CaptureMode mode);
+    void applyOnboardingResult(const OnboardingResult& result);
     void showOnboarding();
 };
 }

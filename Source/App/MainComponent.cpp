@@ -78,7 +78,7 @@ MainComponent::MainComponent()
     capturePanel.startUpdating();
     capturePanel.setVisible(false);   // onboarding shows first
 
-    onboarding.onComplete = [this](CaptureType type, CaptureMode mode) { applyOnboardingResult(type, mode); };
+    onboarding.onComplete = [this](const OnboardingResult& result) { applyOnboardingResult(result); };
     onboarding.onSkip     = [this] { finishOnboarding(false); };
     addAndMakeVisible(onboarding);
 
@@ -122,9 +122,9 @@ void MainComponent::resized()
     onboarding.setBounds(area);
 }
 
-void MainComponent::applyOnboardingResult(CaptureType type, CaptureMode mode)
+void MainComponent::applyOnboardingResult(const OnboardingResult& result)
 {
-    capturePanel.applyOnboardingSelection(type, mode);
+    capturePanel.applyOnboardingSelection(result);
     finishOnboarding(true);
 }
 

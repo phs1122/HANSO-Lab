@@ -11,6 +11,7 @@
 #include "UI/CaptureInputControls.h"
 #include "UI/LabPanel.h"
 #include "UI/LevelMeter.h"
+#include "UI/OnboardingPanel.h"
 
 namespace hanso
 {
@@ -25,9 +26,9 @@ public:
     void paintOverChildren(juce::Graphics& g) override;
     void setLayoutDebugEnabled(bool enabled);
     bool isLayoutDebugEnabled() const noexcept;
-    // Applies an onboarding questionnaire result: capture type + mode, then
-    // starts a fresh capture reflecting them.
-    void applyOnboardingSelection(CaptureType type, CaptureMode mode);
+    // Applies an onboarding questionnaire result (type, mode, physical paths,
+    // cable), then starts a fresh capture reflecting them.
+    void applyOnboardingSelection(const OnboardingResult& result);
 
 private:
     void timerCallback() override;

@@ -33,7 +33,14 @@ public:
 
     CaptureType captureType { CaptureType::Amp };
     CaptureMode mode { CaptureMode::Easy };
-    CableGuideType cableGuide { CableGuideType::NormalTsCable };
+    // Breakout cable (LEFT plug only) is the officially supported headphone
+    // path; a single TS cable inserted into a stereo phones jack can short the
+    // right output stage, so it is experimental-only (CAPTURE_CONNECTION_POLICY).
+    CableGuideType cableGuide { CableGuideType::TrsToDualTsYCable };
+    // Physical chain descriptors for metadata. Defaults are refined by the
+    // onboarding questionnaire; setCaptureType() re-derives the return path.
+    ExcitationPath excitationPath { ExcitationPath::DirectLine };
+    ReturnPath returnPath { ReturnPath::Unknown };
     CaptureRecipe recipe;
     juce::String currentStepId;
     bool calibrationPassed { false };

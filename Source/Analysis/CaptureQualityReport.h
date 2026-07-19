@@ -32,6 +32,8 @@ struct CaptureQualityReport
     int latencySamples { 0 };
     double latencyMs { 0.0 };
     float alignmentConfidence { 0.0f };
+    juce::String alignmentMode;
+    int alignmentPolarity { 1 };
     std::vector<CaptureQualityIssue> issues;
 
     bool hasWarnings() const noexcept { return overallSeverity == CaptureQualitySeverity::Warning; }

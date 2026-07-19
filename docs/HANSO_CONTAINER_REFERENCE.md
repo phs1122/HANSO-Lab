@@ -95,13 +95,22 @@ Cabinet 패키지의 `cabProfile`은 다음 additive 필드를 가질 수 있다
 
 Amp Gain 및 정적 Pedal Drive anchor workflow는 `metadata.captureSettings.testSignalType`에 `HansoProbeA1`을 기록한다. `captureWorkflow.captureRecipe.anchors[]`의 `probeVariant`와 `testSignalType`은 anchor별 `HansoProbeA1Full` 또는 `HansoProbeA1Delta`, `testSignalDurationSeconds`는 각각 24.5 또는 10.0을 기록한다. 파형과 segment 역할의 정본은 `docs/HANSO_PROBE_A1.md`이다.
 
+각 anchor의 `quality`는 additive 정렬 provenance를 기록한다.
+`alignmentMode`은 평균 제거 상관으로 선택한 `"direct"` 또는 `"rectified"`이고,
+`alignmentPolarity`는 선택된 상관의 `1`/`-1`, `alignmentConfidence`는 그 절댓값이다.
+정류 신호의 양의 평균값을 제거하므로 무관한 리턴이 높은 신뢰도로 보이는 기존
+cosine-baseline 문제를 피한다. 구자산에는 mode/polarity가 없을 수 있다.
+
 Anchor별 optional probe validation chunks:
 
-- `capture/gain-<anchor>/probe-reference-dry.pcm16` — held-out dry reference, role `probeValidationDry`
-- `capture/gain-<anchor>/probe-reference-a-start.pcm16` — Full 시작 실측 reference, role `probeValidationReal`
-- `capture/gain-<anchor>/probe-reference-a-end.pcm16` — Full 종료 실측 reference, role `probeValidationReal`
-- `capture/gain-<anchor>/probe-reference-a.pcm16` — Delta 실측 reference, role `probeValidationReal`
-- `capture/gain-<anchor>/sample-hanso-probe-reference.pcm16` — fidelity evaluator가 소비하는 held-out 실측 reference, role `ampProcessedSample`
+- `capture/gain-<anchor>/probe-reference-dry.f32` — held-out dry reference, role `probeValidationDry`
+- `capture/gain-<anchor>/probe-reference-a-start.f32` — Full 시작 실측 reference, role `probeValidationReal`
+- `capture/gain-<anchor>/probe-reference-a-end.f32` — Full 종료 실측 reference, role `probeValidationReal`
+- `capture/gain-<anchor>/probe-reference-a.f32` — Delta 실측 reference, role `probeValidationReal`
+- `capture/gain-<anchor>/sample-hanso-probe-reference.f32` — fidelity evaluator가 소비하는 held-out 실측 reference, role `ampProcessedSample`
+
+`.pcm16` sibling은 구자산 읽기 fallback일 뿐이며 현재 master producer는 모든
+분석/검증 청크를 float32로 쓴다.
 
 Full의 시작/종료 실측 reference가 모두 있으면 `captureFidelity.anchors[].repeatabilityEsrDb`를 기록할 수 있다. 이 값은 모델 출력 ESR이 아니라 동일한 dry reference에 대한 장비의 시작/종료 repeatability ESR이다. 알 수 없는 소비자는 이 metadata와 chunks를 무시할 수 있으며 기존 compact model chunk의 runtime semantics는 변하지 않는다.
 

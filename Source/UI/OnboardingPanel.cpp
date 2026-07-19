@@ -107,6 +107,7 @@ void OnboardingPanel::restart()
     target = CaptureType::Amp;
     hasReamp = false;
     outType = -1;
+    cableChoice = -1;
     outCapture = -1;
     interfaceAnswered = false;
     targetAnswered = false;
@@ -193,7 +194,7 @@ void OnboardingPanel::render()
             titleLabel.setText(utf8("리앰프 박스가 있나요?"), juce::dontSendNotification);
             subtitle.setText(utf8("리앰프 박스는 인터페이스 출력을 앰프가 기대하는 신호로 바꿔줍니다. 있으면 더 정확합니다."), juce::dontSendNotification);
             choice(0, utf8("예, 있습니다"), utf8("일반 캡쳐 — Line Out → 리앰프 박스 → 장비"), true);
-            choice(1, utf8("아니오, 없습니다"), utf8("간편 캡쳐 — 헤드폰/라인 직결"), true);
+            choice(1, utf8("아니오, 없습니다"), utf8("간편 캡쳐 — 라인/헤드폰 직결을 보조하는 호환 모드"), true);
             if (reampAnswered) select(hasReamp ? 0 : 1);
             nextEnabled = reampAnswered;
             break;
@@ -202,10 +203,41 @@ void OnboardingPanel::render()
             kicker.setText(utf8("입력 경로"), juce::dontSendNotification);
             titleLabel.setText(utf8("인터페이스 출력은 무엇인가요?"), juce::dontSendNotification);
             subtitle.setText(utf8("리앰프 박스가 없으니 앱 출력이 유일한 게인 레버입니다."), juce::dontSendNotification);
-            choice(0, utf8("라인 아웃 있음"), utf8("더 나은 경로. 스테레오 가능. 험/그라운드 루프에 주의하세요."), true);
-            choice(1, utf8("헤드폰만 있음"), utf8("권장: TS 기타 케이블 (앱이 Left만 출력). 3.5mm면 3.5→6.35 어댑터."), true);
+            choice(0, utf8("라인 아웃 있음"), utf8("더 나은 경로. 단자 형태(TS/TRS/XLR/RCA)에 따라 배선이 다릅니다. 험/그라운드 루프에 주의하세요."), true);
+            choice(1, utf8("헤드폰만 있음"), utf8("다음 화면에서 사용 가능한 케이블을 확인합니다. 3.5mm 잭이면 3.5→6.35 어댑터가 필요합니다."), true);
             if (outType >= 0) select(outType);
             nextEnabled = (outType >= 0);
+            break;
+
+        case Step::CableCheck:
+            kicker.setText(utf8("입력 경로"), juce::dontSendNotification);
+            titleLabel.setText(utf8("사용 가능한 케이블은 무엇인가요?"), juce::dontSendNotification);
+            subtitle.setText(utf8("헤드폰 출력 직결의 기본 요구 케이블은 TRS→듀얼 TS 브레이크아웃입니다."), juce::dontSendNotification);
+            choice(0, utf8("TRS→듀얼 TS 브레이크아웃 있음"),
+                   utf8("권장. LEFT(L) 플러그만 앰프 Input에 연결하고, RIGHT(R) 플러그는 연결하지 않습니다."), true);
+            choice(1, utf8("일반 기타 TS 케이블만 있음"),
+                   utf8("실험적 빠른 시작 — 다음 화면의 안내를 확인한 뒤 진행할 수 있습니다."), true);
+            if (cableChoice >= 0) select(cableChoice);
+            nextEnabled = (cableChoice >= 0);
+            break;
+
+        case Step::ExperimentalConsent:
+            kicker.setText(utf8("실험적 연결"), juce::dontSendNotification);
+            titleLabel.setText(utf8("실험적 연결 안내"), juce::dontSendNotification);
+            subtitle.setVisible(false);
+            note.setVisible(true);
+            note.setColour(juce::Label::textColourId, cText);
+            note.setText(utf8(
+                "이 방식은 스테레오 헤드폰 출력에 모노 TS 케이블을 직접 연결합니다.\n"
+                "일부 오디오 인터페이스에서는 사용하지 않는 출력 채널이 접지될 수 있습니다.\n\n"
+                "대부분의 장비에서 정상적으로 동작할 수 있지만, HANSO Lab은 모든 오디오\n"
+                "인터페이스의 출력 회로와 보호 설계를 확인할 수 없습니다.\n\n"
+                "가능하면 TRS→듀얼 TS 브레이크아웃 케이블을 사용하세요."),
+                juce::dontSendNotification);
+            choice(0, utf8("권장 연결 방법 보기"),
+                   utf8("이전 화면으로 돌아가 브레이크아웃 케이블 경로를 선택합니다."), true);
+            nextButton.setButtonText(utf8("이해했으며 계속"));
+            nextEnabled = true;
             break;
 
         case Step::OutputCapture:
@@ -271,9 +303,11 @@ void OnboardingPanel::render()
                          : utf8("Left 출력 → 페달 → 인터페이스 Instrument/Line Input");
                 else
                     path = hasReamp
-                         ? utf8("Line Out → 리앰프 박스 → 장비 (스테레오, 출력 -12 dBFS 고정)")
-                         : (outType == 0 ? utf8("라인 아웃 직결 (스테레오, 출력 슬라이더)")
-                                         : utf8("헤드폰 직결 · TS 케이블 (Left-only, 출력 슬라이더)"));
+                         ? utf8("Line Out → 리앰프 박스 → 장비 (모노 신호 · 저레벨 캘리브레이션으로 레벨 확정)")
+                         : (outType == 0 ? utf8("라인 아웃 직결 (모노 신호 · 출력 슬라이더 · 단자 배선 확인)")
+                            : cableChoice == 1
+                                ? utf8("헤드폰 아웃 → 단일 TS 직결 (실험적 빠른 시작 · Left-only, 출력 슬라이더)")
+                                : utf8("헤드폰 아웃 → TRS→듀얼 TS 브레이크아웃 · LEFT 플러그만 (Left-only, 출력 슬라이더)"));
                 note.setText(utf8("✅  ") + modeText + "\n" + path, juce::dontSendNotification);
                 note.setColour(juce::Label::textColourId, cGreen);
                 nextButton.setButtonText(utf8("튜토리얼로"));
@@ -306,6 +340,7 @@ void OnboardingPanel::render()
                 "오디오 인터페이스 세팅\n"
                 "  • 샘플레이트 48kHz · 버퍼는 안정적인 값\n"
                 "  • 앱 출력 → 장비, 장비 리턴 → 캡쳐 입력 채널로 지정\n"
+                "  • 앱 출력은 낮은 레벨에서 시작해 캘리브레이션으로 단계적으로 올림\n"
                 "  • 리턴이 -36 ~ -8 dBFS에 들도록 입력 게인 조절 (클리핑 금지)\n"
                 "  • 인터페이스 믹서의 다이렉트 모니터/루프백은 꺼서 이중 경로 방지");
                 if (target == CaptureType::Pedal || target == CaptureType::Effect)
@@ -330,6 +365,12 @@ void OnboardingPanel::applyChoice(int index)
         case Step::Target:         targetAnswered = true;    target = (index == 1 ? CaptureType::Amp : index == 2 ? CaptureType::Pedal : index == 3 ? CaptureType::PreAmp : index == 4 ? CaptureType::Cabinet : CaptureType::FullRig); break;
         case Step::Reamp:          reampAnswered = true;     hasReamp = (index == 0); break;
         case Step::OutputType:     outType = index; break;
+        case Step::CableCheck:     cableChoice = index; break;
+        case Step::ExperimentalConsent:
+            // "권장 연결 방법 보기": back out of the experimental path and
+            // preselect the breakout cable on the cable screen.
+            if (index == 0) { cableChoice = 0; step = Step::CableCheck; }
+            break;
         case Step::OutputCapture:  outCapture = index; break;
         default: break;
     }
@@ -344,7 +385,9 @@ OnboardingPanel::Step OnboardingPanel::nextStep(Step s) const
         case Step::Interface:     return Step::Target;
         case Step::Target:        return Step::Reamp;
         case Step::Reamp:         return hasReamp ? Step::OutputCapture : Step::OutputType;
-        case Step::OutputType:    return Step::OutputCapture;
+        case Step::OutputType:    return outType == 1 ? Step::CableCheck : Step::OutputCapture;
+        case Step::CableCheck:    return cableChoice == 1 ? Step::ExperimentalConsent : Step::OutputCapture;
+        case Step::ExperimentalConsent: return Step::OutputCapture;
         case Step::OutputCapture: return Step::Verdict;
         case Step::Verdict:       return Step::Tutorial;
         case Step::Tutorial:      return Step::Tutorial;
@@ -360,7 +403,12 @@ OnboardingPanel::Step OnboardingPanel::prevStep(Step s) const
         case Step::Target:        return Step::Interface;
         case Step::Reamp:         return Step::Target;
         case Step::OutputType:    return Step::Reamp;
-        case Step::OutputCapture: return hasReamp ? Step::Reamp : Step::OutputType;
+        case Step::CableCheck:    return Step::OutputType;
+        case Step::ExperimentalConsent: return Step::CableCheck;
+        case Step::OutputCapture:
+            return hasReamp ? Step::Reamp
+                 : outType != 1 ? Step::OutputType
+                 : cableChoice == 1 ? Step::ExperimentalConsent : Step::CableCheck;
         case Step::Verdict:       return Step::OutputCapture;
         case Step::Tutorial:      return Step::Verdict;
         case Step::Welcome:       return Step::Welcome;
@@ -373,7 +421,37 @@ void OnboardingPanel::goNext()
     if (step == Step::Tutorial)
     {
         if (onComplete)
-            onComplete(target, hasReamp ? CaptureMode::Standard : CaptureMode::Easy);
+        {
+            OnboardingResult result;
+            result.captureType = target;
+            result.mode = hasReamp ? CaptureMode::Standard : CaptureMode::Easy;
+            result.excitationPath = hasReamp ? ExcitationPath::Reamp
+                                  : outType == 1 ? ExcitationPath::DirectHeadphone
+                                                 : ExcitationPath::DirectLine;
+            result.cableGuide = (! hasReamp && outType == 1 && cableChoice == 1)
+                              ? CableGuideType::NormalTsCable
+                              : CableGuideType::TrsToDualTsYCable;
+            switch (target)
+            {
+                case CaptureType::Amp:
+                    result.returnPath = outCapture == 0 ? ReturnPath::Loadbox : ReturnPath::LineOrDi;
+                    break;
+                case CaptureType::FullRig:
+                    result.returnPath = outCapture == 1 ? ReturnPath::Microphone : ReturnPath::LineOrDi;
+                    break;
+                case CaptureType::Cabinet:
+                    result.returnPath = ReturnPath::Microphone;
+                    break;
+                case CaptureType::Pedal:
+                case CaptureType::Effect:
+                    result.returnPath = ReturnPath::InstrumentInput;
+                    break;
+                case CaptureType::PreAmp:
+                    result.returnPath = ReturnPath::LineOrDi;
+                    break;
+            }
+            onComplete(result);
+        }
         return;
     }
 
@@ -411,7 +489,9 @@ void OnboardingPanel::paint(juce::Graphics& g)
         case Step::Interface:     idx = 0; break;
         case Step::Target:        idx = 1; break;
         case Step::Reamp:
-        case Step::OutputType:    idx = 2; break;
+        case Step::OutputType:
+        case Step::CableCheck:
+        case Step::ExperimentalConsent: idx = 2; break;
         case Step::OutputCapture: idx = 3; break;
         case Step::Verdict:       idx = 4; break;
         default: break;

@@ -40,9 +40,9 @@ CaptureType captureTypeFromBoxId(int id)
 juce::String modeDescription(CaptureMode mode)
 {
     if (mode == CaptureMode::Easy)
-        return utf8("간편 캡쳐\nPhones Out → 일반 기타 케이블 → 장비 Input\n리앰프 박스가 없는 사용자를 위한 방식입니다.\n정확도는 일반 캡쳐보다 낮을 수 있으며, 앱은 Left 채널만 출력하고 Right 채널은 무음 처리합니다.");
+        return utf8("간편 캡쳐 (직접 연결 호환 모드)\n언밸런스드 Line Out 직결, 또는 Phones Out → TRS→듀얼 TS 브레이크아웃(LEFT 플러그만) → 장비 Input\n앱은 출력 레벨 관리·라우팅·캘리브레이션을 보조하지만, 리앰프 박스의 임피던스 변환·밸런스 변환·절연은 대신하지 못합니다.\n인터페이스와 직접 연결 조건의 영향이 결과에 포함될 수 있어, 일반 캡쳐보다 장비 간 재현성과 입력 조건 표준화 수준이 낮습니다. 앱은 Left 채널만 출력합니다.");
 
-    return utf8("일반 캡쳐\nLine Out → 리앰프 박스 → 장비 Input\n가장 정확한 방식입니다.");
+    return utf8("일반 캡쳐\nLine Out → 리앰프 박스 → 장비 Input\n직접 연결 방식에 비해 입력 조건의 재현성과 장비 간 호환성을 높일 수 있는 권장 방식입니다. 낮은 출력에서 캘리브레이션을 시작해 사용 가능한 레벨을 확정합니다.");
 }
 
 juce::String workflowDescription(const CaptureWizardState& wizard)
@@ -63,9 +63,9 @@ juce::String workflowDescription(const CaptureWizardState& wizard)
 juce::String cableGuideText(CableGuideType type)
 {
     if (type == CableGuideType::TrsToDualTsYCable)
-        return utf8("TRS to Dual TS Y 케이블\n- 사용 가능\n- Left TS만 장비 Input에 연결하세요\n- Right TS는 연결하지 마세요\n- 물리적으로 조금 더 안정적인 방식입니다\n- 캡쳐 체인 자체는 일반 TS 케이블 방식과 동일합니다");
+        return utf8("TRS→듀얼 TS 브레이크아웃 케이블 (공식 지원)\n- 헤드폰 출력 직결의 기본 요구 케이블입니다\n- 브레이크아웃 케이블의 LEFT(L) 플러그만 앰프 Input에 연결하세요\n- RIGHT(R) 플러그는 연결하지 마세요 (앱은 Left만 출력, Right는 무음)\n- 간편 캡쳐 결과에는 인터페이스 직접 연결 조건이 포함될 수 있습니다");
 
-    return utf8("일반 TS 기타 케이블\n- 사용 가능\n- 가장 일반적인 방식\n- 앱은 Left 채널만 사용합니다\n- Right 채널은 무음 처리됩니다\n- 리앰프 박스 방식보다 정확도는 낮을 수 있습니다");
+    return utf8("단일 TS 직결 — 실험적 빠른 시작 (공식 기본 연결 아님)\n- 스테레오 헤드폰 출력에 단일 TS 플러그를 꽂으면 사용하지 않는 Right 출력 채널이 지속적으로 접지될 수 있습니다\n- 앱은 Right를 무음 처리하지만, 앱 외부의 출력(OS·다른 앱·DSP 믹서·앱 종료 후 상태)까지 통제할 수는 없습니다\n- 대부분의 현대적인 헤드폰 출력에서 즉각적인 손상 가능성은 높지 않을 수 있으나, 불특정 인터페이스의 출력 회로와 보호 설계를 보증할 수 없어 공식 기본 연결로 제공하지 않습니다\n- 가능하면 TRS→듀얼 TS 브레이크아웃 케이블을 사용하세요");
 }
 
 juce::String qualityText(const CaptureStepResult* result)
@@ -192,16 +192,49 @@ CapturePanel::CapturePanel(ApplicationState& state, CaptureEngine& captureEngine
     addAndMakeVisible(standardModeButton);
     addAndMakeVisible(easyModeButton);
 
-    cableGuideBox.addItem(utf8("일반 TS 기타 케이블"), 1);
-    cableGuideBox.addItem(utf8("TRS to Dual TS Y 케이블"), 2);
-    cableGuideBox.setSelectedId(1);
+    cableGuideBox.addItem(utf8("TRS→듀얼 TS 브레이크아웃 · LEFT만 (기본)"), 2);
+    cableGuideBox.addItem(utf8("실험적 빠른 시작 · 단일 TS 직결"), 1);
+    cableGuideBox.setSelectedId(2);
     cableGuideBox.onChange = [this]
     {
-        appState.captureWizard().cableGuide = cableGuideBox.getSelectedId() == 2
-                                            ? CableGuideType::TrsToDualTsYCable
-                                            : CableGuideType::NormalTsCable;
-        appState.currentPackage().captureWorkflow = appState.captureWizard().toMetadataVar();
-        syncWizardUi();
+        auto applyCableGuide = [this](CableGuideType type)
+        {
+            appState.captureWizard().cableGuide = type;
+            appState.currentPackage().captureWorkflow = appState.captureWizard().toMetadataVar();
+            syncWizardUi();
+        };
+
+        if (cableGuideBox.getSelectedId() != 1)
+        {
+            applyCableGuide(CableGuideType::TrsToDualTsYCable);
+            return;
+        }
+
+        // Experimental quick start is consent-gated: the one-click dropdown pick
+        // alone must not switch to the unsupported single-TS connection
+        // (CAPTURE_CONNECTION_POLICY §2).
+        juce::AlertWindow::showOkCancelBox(
+            juce::MessageBoxIconType::WarningIcon,
+            utf8("실험적 연결"),
+            utf8("이 방식은 스테레오 헤드폰 출력에 모노 TS 케이블을 직접 연결합니다. "
+                 "일부 오디오 인터페이스에서는 사용하지 않는 출력 채널이 접지될 수 있습니다.\n\n"
+                 "대부분의 장비에서 정상적으로 동작할 수 있지만, HANSO Lab은 모든 오디오 "
+                 "인터페이스의 출력 회로와 보호 설계를 확인할 수 없습니다.\n\n"
+                 "가능하면 TRS→듀얼 TS 브레이크아웃 케이블을 사용하세요."),
+            utf8("이해했으며 실험적 연결로 계속"),
+            utf8("권장 연결 방법 사용"),
+            this,
+            juce::ModalCallbackFunction::create([this, applyCableGuide](int confirmed)
+            {
+                if (confirmed != 0)
+                {
+                    applyCableGuide(CableGuideType::NormalTsCable);
+                    return;
+                }
+
+                cableGuideBox.setSelectedId(2, juce::dontSendNotification);
+                applyCableGuide(CableGuideType::TrsToDualTsYCable);
+            }));
     };
     addAndMakeVisible(cableGuideBox);
 
@@ -290,7 +323,7 @@ CapturePanel::CapturePanel(ApplicationState& state, CaptureEngine& captureEngine
     calibrationOutputMeterLabel.setJustificationType(juce::Justification::topLeft);
     calibrationInputMeterLabel.setJustificationType(juce::Justification::topLeft);
     calibrationMeterTitle.setColour(juce::Label::textColourId, juce::Colours::lightblue);
-    calibrationOutputSliderLabel.setText(utf8("앱 출력 레벨 (Easy는 calibration 통과 후 최대치까지 · Standard는 리앰프 박스 전제로 -12 dBFS 제한)"), juce::dontSendNotification);
+    calibrationOutputSliderLabel.setText(utf8("앱 출력 레벨 (낮게 시작해 단계적으로 · 리턴 -36 ~ -8 dBFS 창으로 확정)"), juce::dontSendNotification);
     calibrationOutputSliderLabel.setJustificationType(juce::Justification::centredLeft);
     calibrationOutputSlider.setRange(-50.0, -3.0, 0.5);
     calibrationOutputSlider.setValue(capture.calibrationOutputDb(), juce::dontSendNotification);
@@ -301,7 +334,11 @@ CapturePanel::CapturePanel(ApplicationState& state, CaptureEngine& captureEngine
         capture.setCalibrationOutputDb(static_cast<float>(calibrationOutputSlider.getValue()));
     };
     calibrationOutputMeter.setRange(-60.0f, 0.0f);
-    calibrationOutputMeter.setTargetRange(-42.0f, -24.0f);
+    // Output target mirrors the engine's calibration output window: below
+    // -42 dBFS flags a dead/too-weak output, and the top sits at the slider
+    // ceiling (-3 dBFS) because every slider-reachable level is legitimate —
+    // the return window is the actual safety guard, not the output level.
+    calibrationOutputMeter.setTargetRange(-42.0f, -3.0f);
     calibrationInputMeter.setRange(-60.0f, 0.0f);
     calibrationInputMeter.setTargetRange(-36.0f, -8.0f);
     addAndMakeVisible(calibrationMeterTitle);
@@ -702,14 +739,25 @@ void CapturePanel::updateCaptureTypeFromSelector()
     });
 }
 
-void CapturePanel::applyOnboardingSelection(CaptureType type, CaptureMode mode)
+void CapturePanel::applyOnboardingSelection(const OnboardingResult& result)
 {
     // Set the mode radios first: applyCaptureType() calls updateModeFromButtons()
     // which reads them. It also resets the wizard, so the mode lock is clear.
-    easyModeButton.setToggleState(mode == CaptureMode::Easy, juce::dontSendNotification);
-    standardModeButton.setToggleState(mode == CaptureMode::Standard, juce::dontSendNotification);
-    captureTypeBox.setSelectedId(captureTypeBoxId(type), juce::dontSendNotification);
-    applyCaptureType(type);
+    easyModeButton.setToggleState(result.mode == CaptureMode::Easy, juce::dontSendNotification);
+    standardModeButton.setToggleState(result.mode == CaptureMode::Standard, juce::dontSendNotification);
+    captureTypeBox.setSelectedId(captureTypeBoxId(result.captureType), juce::dontSendNotification);
+    applyCaptureType(result.captureType);
+
+    // Refine the wizard defaults with the questionnaire's actual answers. The
+    // experimental single-TS path was already consent-gated inside onboarding.
+    auto& wizard = appState.captureWizard();
+    wizard.excitationPath = result.excitationPath;
+    wizard.returnPath = result.returnPath;
+    wizard.cableGuide = result.cableGuide;
+    cableGuideBox.setSelectedId(result.cableGuide == CableGuideType::TrsToDualTsYCable ? 2 : 1,
+                                juce::dontSendNotification);
+    appState.currentPackage().captureWorkflow = wizard.toMetadataVar();
+    syncWizardUi();
 }
 
 void CapturePanel::applyCaptureType(CaptureType type)
@@ -739,7 +787,12 @@ void CapturePanel::syncWizardUi()
 {
     const auto& wizard = appState.captureWizard();
     captureTypeBox.setSelectedId(captureTypeBoxId(wizard.captureType), juce::dontSendNotification);
-    connectionGuideLabel.setText(workflowDescription(wizard) + "\n\n" + cableGuideText(wizard.cableGuide), juce::dontSendNotification);
+    // Cable guidance only applies to Easy direct connections; Standard runs
+    // through a reamp box, so the headphone-cable text would be misleading there.
+    connectionGuideLabel.setText(wizard.mode == CaptureMode::Easy
+                                     ? workflowDescription(wizard) + "\n\n" + cableGuideText(wizard.cableGuide)
+                                     : workflowDescription(wizard),
+                                 juce::dontSendNotification);
 
     {
         const auto isCabinet = wizard.captureType == CaptureType::Cabinet;
@@ -844,21 +897,22 @@ void CapturePanel::syncWizardUi()
         qualityLabel.setText(qualityText(wizard.findResult(step->stepId)), juce::dontSendNotification);
         const auto showLevelMeters = step->stepId != "setup";
         const auto showCalibrationControls = step->stepId == "calibration";
-        // Easy: app output follows the slider (only gain lever). Standard: output
-        // is fixed and driven by the reamp box, so hide both the output slider and
-        // the output meter entirely — the user cannot act on them, only the return
-        // matters there.
+        // Both modes drive the app output with the slider: a fixed dBFS level
+        // cannot pin the analog voltage reaching the amp (it varies per interface,
+        // reference level, volume knob, cabling), so the staged low-start
+        // calibration with the return window is the actual level authority
+        // (CAPTURE_CONNECTION_POLICY §3).
         const auto easyMode = wizard.mode == CaptureMode::Easy;
-        const auto showOutputSlider = showCalibrationControls && easyMode;
-        const auto showOutputMeter = showLevelMeters && easyMode;
+        const auto showOutputSlider = showCalibrationControls;
+        const auto showOutputMeter = showLevelMeters;
         const auto visibilityChanged = calibrationInputMeter.isVisible() != showLevelMeters
                                     || calibrationOutputSlider.isVisible() != showOutputSlider
                                     || calibrationOutputMeter.isVisible() != showOutputMeter;
         calibrationMeterTitle.setVisible(showLevelMeters);
         calibrationOutputSliderLabel.setVisible(showCalibrationControls);
         calibrationOutputSliderLabel.setText(easyMode
-            ? utf8("앱 출력 레벨 (슬라이더로 조절 · 리턴 클리핑만 주의)")
-            : utf8("앱 출력 고정 -12 dBFS · 드라이브는 리앰프 박스로 · 리턴만 확인하면 됩니다"),
+            ? utf8("앱 출력 레벨 (낮게 시작해 단계적으로 · 리턴 클리핑 주의)")
+            : utf8("앱 출력 레벨 (낮게 시작해 단계적으로 · 드라이브는 리앰프 박스로 · 초기 제안 -12 dBFS 이하)"),
             juce::dontSendNotification);
         calibrationOutputSlider.setVisible(showOutputSlider);
         calibrationOutputMeter.setVisible(showOutputMeter);
@@ -954,6 +1008,13 @@ void CapturePanel::updateModeFromButtons()
     }
 
     wizard.mode = requested;
+    // Keep the physical-path metadata consistent with the mode: Standard means
+    // a reamp box drives the device; Easy means a direct connection (line by
+    // default — onboarding refines to direct_headphone when applicable).
+    if (requested == CaptureMode::Standard)
+        wizard.excitationPath = ExcitationPath::Reamp;
+    else if (wizard.excitationPath == ExcitationPath::Reamp)
+        wizard.excitationPath = ExcitationPath::DirectLine;
     appState.currentPackage().captureWorkflow = wizard.toMetadataVar();
     syncWizardUi();
 }

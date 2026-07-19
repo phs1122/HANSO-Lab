@@ -33,14 +33,25 @@ private:
     bool selected = false;
 };
 
+// Everything the questionnaire learned about the user's rig, handed to the
+// capture panel so metadata and cable guidance start from the real answers.
+struct OnboardingResult
+{
+    CaptureType captureType { CaptureType::Amp };
+    CaptureMode mode { CaptureMode::Easy };
+    ExcitationPath excitationPath { ExcitationPath::DirectLine };
+    ReturnPath returnPath { ReturnPath::Unknown };
+    CableGuideType cableGuide { CableGuideType::TrsToDualTsYCable };
+};
+
 // First-run onboarding: welcome -> equipment questionnaire -> verdict -> tutorial.
-// On completion it reports the chosen capture type + mode to the host.
+// On completion it reports the questionnaire result to the host.
 class OnboardingPanel final : public juce::Component
 {
 public:
     OnboardingPanel();
 
-    std::function<void(CaptureType, CaptureMode)> onComplete;
+    std::function<void(const OnboardingResult&)> onComplete;
     std::function<void()> onSkip;
 
     void restart();
@@ -48,7 +59,8 @@ public:
     void paint(juce::Graphics&) override;
 
 private:
-    enum class Step { Welcome, Interface, Target, Reamp, OutputType, OutputCapture, Verdict, Tutorial };
+    enum class Step { Welcome, Interface, Target, Reamp, OutputType, CableCheck,
+                      ExperimentalConsent, OutputCapture, Verdict, Tutorial };
 
     void render();
     void applyChoice(int index);
@@ -66,6 +78,7 @@ private:
     CaptureType target = CaptureType::Amp;
     bool hasReamp = false;
     int outType = -1;        // 0 = line out, 1 = headphone only
+    int cableChoice = -1;    // headphone only: 0 = TRS->dual-TS breakout, 1 = single TS (experimental)
     int outCapture = -1;     // amp: 0 loadbox / 1 line-di-send / 2 none ; cab: 0 mic / 1 none
     bool feasible = true;
     bool interfaceAnswered = false;

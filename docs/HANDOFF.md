@@ -38,7 +38,8 @@ cmake --build build --target HANSO_Lab_Tests               # 테스트
   피크를 스윕 진폭(캘리브레이션 파생)에 정규화 — **절대 스윕보다 크지 않음**.
 - 라이브러리가 비어 있으면 스윕 단독 + 로그 안내(기존 흐름과 동일).
 - chunk 저장:
-  - dry 스윕: `capture/gain-XXX/dry-reference.pcm16` (**스윕만** — 모델 추출 입력 오염 방지)
+  - dry 모델-fit 입력: `capture/gain-XXX/dry-reference.f32` (구자산
+    `.pcm16` 읽기 fallback 유지)
   - dry 샘플(1회): `capture/shared/sample-<id>.pcm16`
   - 실녹음(정렬 후 분할): `capture/gain-XXX/sample-<id>.pcm16`
   - id 규칙: `sanitizePreviewSampleId()` in `CaptureStepUtils.h` (소문자, 비영숫자→'-') — 캡쳐/프리뷰 공용.

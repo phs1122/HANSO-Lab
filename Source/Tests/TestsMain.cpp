@@ -334,6 +334,62 @@ void testAlignmentOffset()
           "estimated=" + juce::String(result.estimatedOffsetSamples));
     check(result.confidence > 0.8f, "alignment confidence high on clean delay",
           "confidence=" + juce::String(result.confidence, 2));
+    check(result.mode == hanso::SignalAlignmentMode::Direct && result.polarity == 1,
+          "clean delay records direct positive-polarity alignment");
+
+    delayed.applyGain(-1.0f);
+    const auto inverted = hanso::SignalAlignment().estimateOffset(dry, delayed, sampleRate);
+    check(std::abs(inverted.estimatedOffsetSamples - offset) <= 4
+              && inverted.mode == hanso::SignalAlignmentMode::Direct
+              && inverted.polarity == -1
+              && inverted.confidence > 0.8f,
+          "direct alignment preserves inverted-polarity evidence",
+          "offset=" + juce::String(inverted.estimatedOffsetSamples)
+              + " confidence=" + juce::String(inverted.confidence, 2));
+
+    juce::AudioBuffer<float> rectified(1, dry.getNumSamples());
+    for (int sample = 0; sample < dry.getNumSamples(); ++sample)
+        rectified.setSample(0, sample, std::abs(dry.getSample(0, sample)));
+    const auto rectifiedResult = hanso::SignalAlignment().estimateOffset(dry, rectified, sampleRate);
+    check(rectifiedResult.mode == hanso::SignalAlignmentMode::RectifiedCentered
+              && rectifiedResult.confidence > 0.8f,
+          "strong nonlinear polarity loss is recorded as rectified alignment",
+          "confidence=" + juce::String(rectifiedResult.confidence, 2));
+
+    juce::Random randomA(0x48414e53);
+    juce::Random randomB(0x4c414247);
+    juce::AudioBuffer<float> unrelatedDry(1, static_cast<int>(sampleRate * 2.0));
+    juce::AudioBuffer<float> unrelatedReturn(1, unrelatedDry.getNumSamples());
+    for (int sample = 0; sample < unrelatedDry.getNumSamples(); ++sample)
+    {
+        unrelatedDry.setSample(0, sample, randomA.nextFloat() * 2.0f - 1.0f);
+        unrelatedReturn.setSample(0, sample, randomB.nextFloat() * 2.0f - 1.0f);
+    }
+    const auto unrelated = hanso::SignalAlignment().estimateOffset(
+        unrelatedDry, unrelatedReturn, sampleRate);
+    check(unrelated.confidence < 0.15f,
+          "mean-centred alignment rejects unrelated positive-magnitude baselines",
+          "confidence=" + juce::String(unrelated.confidence, 3));
+
+    const auto probe = makeHansoProbe(hanso::HansoProbeVariant::Delta, 0.2f);
+    constexpr auto probeOffset = 731;
+    juce::AudioBuffer<float> nonlinearProbeReturn(2, probe.getNumSamples() + probeOffset);
+    nonlinearProbeReturn.clear();
+    juce::Random routeNoise(0x524f5554);
+    for (int sample = 0; sample < probe.getNumSamples(); ++sample)
+    {
+        nonlinearProbeReturn.setSample(
+            0, sample + probeOffset, 0.02f * (routeNoise.nextFloat() * 2.0f - 1.0f));
+        nonlinearProbeReturn.setSample(
+            1, sample + probeOffset, 0.45f * std::tanh(7.0f * probe.getSample(0, sample)));
+    }
+    const auto probeAlignment = hanso::SignalAlignment().estimateOffset(
+        probe, nonlinearProbeReturn, sampleRate);
+    check(std::abs(probeAlignment.estimatedOffsetSamples - probeOffset) <= 4
+              && probeAlignment.confidence >= 0.5f,
+          "HANSO Probe A1 routes and aligns through strong nonlinear drive",
+          "offset=" + juce::String(probeAlignment.estimatedOffsetSamples)
+              + " confidence=" + juce::String(probeAlignment.confidence, 3));
 }
 
 void testDriveExtraction()
@@ -1276,6 +1332,9 @@ void testHighGainFirstUnlockChain()
     hanso::CaptureStepResult probeResult;
     probeResult.stepId = "gain-100";
     probeResult.status = hanso::CaptureStepStatus::Passed;
+    probeResult.quality.alignmentConfidence = 0.95f;
+    probeResult.quality.alignmentMode = "direct";
+    probeResult.quality.alignmentPolarity = -1;
     probeResult.testSignalType = "HansoProbeA1Full";
     probeResult.testSignalDurationSeconds = 24.5;
     wizard.storeResult(probeResult);
@@ -1297,6 +1356,16 @@ void testHighGainFirstUnlockChain()
               && serializedFullAnchor->getProperty("testSignalType").toString() == "HansoProbeA1Full"
               && std::abs(static_cast<double>(serializedFullAnchor->getProperty("testSignalDurationSeconds")) - 24.5) < 1.0e-9,
           "capture workflow records per-anchor probe variant and duration");
+    const auto serializedQuality = serializedFullAnchor != nullptr
+                                 ? serializedFullAnchor->getProperty("quality")
+                                 : juce::var();
+    const auto* qualityObject = serializedQuality.getDynamicObject();
+    check(qualityObject != nullptr
+              && qualityObject->getProperty("alignmentMode").toString() == "direct"
+              && static_cast<int>(qualityObject->getProperty("alignmentPolarity")) == -1
+              && std::abs(static_cast<double>(
+                     qualityObject->getProperty("alignmentConfidence")) - 0.95) < 1.0e-6,
+          "capture workflow records alignment method, polarity, and confidence");
 }
 
 void testDistributionExportStripsAndReencodes()

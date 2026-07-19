@@ -27,9 +27,6 @@ constexpr float calibrationInputMaxDb = -8.0f;
 // a dead or too-weak output.
 constexpr float calibrationOutputMinDb = -42.0f;
 constexpr float calibrationOutputMaxDb = 0.0f;
-// Standard mode fixed output level. A reamp box supplies the analog gain, so
-// the app output is held here (no slider) and the user drives via the reamp box.
-constexpr float standardOutputMaxDb = -12.0f;
 constexpr float calibrationRequiredSnrDb = 12.0f;
 constexpr float calibrationRequiredToneDominanceDb = 6.0f;
 constexpr float calibrationSilentLoopbackThresholdDb = -50.0f;
@@ -674,6 +671,8 @@ bool CaptureEngine::importCabinetIrForStep(const juce::String& stepId,
     quality.peakDbfs = peakDb(result.impulseResponse);
     quality.rmsDbfs = rmsDb(result.impulseResponse);
     quality.alignmentConfidence = 1.0f;
+    quality.alignmentMode = "direct";
+    quality.alignmentPolarity = 1;
 
     CaptureStepResult stepResult;
     stepResult.stepId = stepId;
@@ -753,13 +752,12 @@ bool CaptureEngine::buildCabinetFromSlots()
 
 float CaptureEngine::modeAdjustedOutputDb() const noexcept
 {
-    // Standard: a reamp box provides analog gain, so the app output is fixed and
-    // there is no output slider; the user sets drive on the reamp box.
-    // Easy: no reamp box, so the app output is the only gain lever and follows
-    // the slider directly. Return clipping is the sole guard in both modes.
-    if (appState.captureWizard().mode == CaptureMode::Standard)
-        return standardOutputMaxDb;
-
+    // Both modes follow the slider. A fixed dBFS level cannot pin the analog
+    // voltage that reaches the amp (interface model, reference level, volume
+    // knobs and cabling all change it), and a passive reamp box cannot make up
+    // for a weak interface output, so Standard uses the same staged low-start
+    // level search as Easy. The calibration return window is the level
+    // authority in both modes (CAPTURE_CONNECTION_POLICY §3).
     return userCalibrationOutputDb;
 }
 
@@ -1108,6 +1106,8 @@ void CaptureEngine::updateLiveCalibration()
     quality.noiseFloorDbfs = calibrationNoiseFloorDbfsValue;
     quality.signalToNoiseDb = validation.signalToNoiseDb;
     quality.alignmentConfidence = 1.0f;
+    quality.alignmentMode = "direct";
+    quality.alignmentPolarity = 1;
 
     CaptureStepResult result;
     result.stepId = "calibration";
@@ -1366,6 +1366,8 @@ void CaptureEngine::refresh()
                                                    alignResult.confidence,
                                                    rightMuted,
                                                    qualityTargetForStep(*step));
+            quality.alignmentMode = toString(alignResult.mode);
+            quality.alignmentPolarity = alignResult.polarity;
             if (cabinetPosition && ! cabinetIrExtracted)
             {
                 quality.overallSeverity = CaptureQualitySeverity::Error;

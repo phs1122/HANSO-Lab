@@ -21,6 +21,8 @@ juce::var qualityToVar(const CaptureQualityReport& report)
     object->setProperty("latencySamples", report.latencySamples);
     object->setProperty("latencyMs", report.latencyMs);
     object->setProperty("alignmentConfidence", report.alignmentConfidence);
+    object->setProperty("alignmentMode", report.alignmentMode);
+    object->setProperty("alignmentPolarity", report.alignmentPolarity);
 
     juce::Array<juce::var> issues;
     for (const auto& issue : report.issues)
@@ -57,6 +59,18 @@ void CaptureWizardState::setCaptureType(CaptureType type)
            : captureType == CaptureType::Pedal || captureType == CaptureType::Effect
            ? CaptureRecipe::createStaticPedalCapture()
            : CaptureRecipe::createBasicAmpLiquidGain();
+
+    // Default return path per target; the onboarding questionnaire overwrites
+    // this with the user's actual answer (loadbox vs line out vs mic).
+    switch (captureType)
+    {
+        case CaptureType::Cabinet: returnPath = ReturnPath::Microphone; break;
+        case CaptureType::Pedal:
+        case CaptureType::Effect:  returnPath = ReturnPath::InstrumentInput; break;
+        case CaptureType::PreAmp:  returnPath = ReturnPath::LineOrDi; break;
+        case CaptureType::Amp:
+        case CaptureType::FullRig: returnPath = ReturnPath::LineOrDi; break;
+    }
 
     results.clear();
     cabinetSlots = captureType == CaptureType::Cabinet ? createDefaultCabinetSlots()
@@ -187,6 +201,21 @@ juce::var CaptureWizardState::toMetadataVar() const
     auto object = new juce::DynamicObject();
     object->setProperty("captureType", toString(captureType));
     object->setProperty("captureMode", toString(mode));
+    // captureTarget = what the user modelled; measurementBoundary = which
+    // physical chain the data actually passed through. Every capture (Standard
+    // included) measures the full excitation + return chain, so the boundary is
+    // constant and the real per-rig difference lives in excitationPath /
+    // returnPath (CAPTURE_CONNECTION_POLICY §6).
+    object->setProperty("captureTarget", toString(captureType));
+    object->setProperty("measurementBoundary", "physical_capture_chain");
+
+    auto excitation = new juce::DynamicObject();
+    excitation->setProperty("mode", toString(excitationPath));
+    object->setProperty("excitationPath", excitation);
+
+    auto returnChain = new juce::DynamicObject();
+    returnChain->setProperty("mode", toString(returnPath));
+    object->setProperty("returnPath", returnChain);
 
     auto routing = new juce::DynamicObject();
     routing->setProperty("mode", mode == CaptureMode::Easy ? "MonoLeftOnly" : "Default");
@@ -196,7 +225,8 @@ juce::var CaptureWizardState::toMetadataVar() const
 
     auto cable = new juce::DynamicObject();
     cable->setProperty("selected", toString(cableGuide));
-    cable->setProperty("alternateSupported", "TrsToDualTsYCable");
+    cable->setProperty("supportLevel",
+                       cableGuide == CableGuideType::TrsToDualTsYCable ? "official" : "experimental");
     object->setProperty("cableGuide", cable);
 
     auto recipeObject = new juce::DynamicObject();
